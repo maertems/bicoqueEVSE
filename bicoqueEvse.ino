@@ -19,8 +19,8 @@ ModbusMaster232 node(1);
 
 
 // firmware version
-#define SOFT_VERSION "1.4.58"
-#define SOFT_DATE "2017-12-21"
+#define SOFT_VERSION "1.4.59"
+#define SOFT_DATE "2018-09-06"
 #define EVSE_VERSION 7
 
 // address for EEPROM
@@ -463,6 +463,9 @@ void evseUpdatePower(int power, int currentOnly)
     powerCurrent = power;
   }
 
+  // to be test. Now we stop/start with other function.
+  powerCurrent = power;
+
   
   evseWrite("currentLimit", powerCurrent);
   evseCurrentLimit = powerCurrent;
@@ -497,6 +500,28 @@ void evseWrite(String evseRegister, int value)
         // default 5. Need to set 0 for set currentLimit to 0A
         Serial.print("authorize min Amp : "); Serial.println(value);
         RegisterToWriteIn = 2002; 
+   }
+   else if (evseRegister == "evseStatus")
+   {
+	int valueToWrite;
+	if (value == "active")
+	{
+		valueToWrite = 0;
+	}
+	else if (value == "disactive")
+        {
+                // valueToWrite = 8192; //-- disactive EVSE after charge
+                valueToWrite = 16384; //-- disactive EVSE
+        }
+	else
+	{
+		Serial.println("evseStatus not correct");
+		return;
+	}
+
+	value = valueToWrite;
+	Serial.print("evseStatus, witre value into 2005 register : "); Serial.println(value);
+	RegisterToWriteIn = 2005;
    }
    else
    {
@@ -927,12 +952,14 @@ void webWrite()
     if (chargeOn != "")
     {
       message += "chargeOn found : -"; message += chargeOn; message += "-\n";
-      evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
+      //evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
+      evseWrite("evseStatus", "active");
     }
     if (chargeOff != "")
     {
       message += "chargeOff found : -"; message += chargeOff; message += "-\n";
-      evseUpdatePower(0, FORCE_CURRENT);
+      //evseUpdatePower(0, FORCE_CURRENT);
+      evseWrite("evseStatus", "disactive");
     }
     if (registerNumber != "" && value != "")
     {
@@ -1452,27 +1479,31 @@ void loop()
       {
         if (evseStatus <= 1)
         {
-          if (evseAutoStart == 1)
+          if (evseAutoStart == 1) // We are into autostart mode
           {
+	    // Go to the menu
             internalMode = 1;
           }
-          else
+          else // In manuel mode
           {
-            // not autostart mode. so in pressed button, need to launch the start
-            evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
+            // so in long pressed button, need to launch the start
+            // evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
+            evseWrite("evseStatus", "active");
           }
         }
         else if (evseStatus == 2) // EV present
         {
           // set curentAmp with the powerOnAmp
           // never be in this case with the firmware we have. but if long press, set current to launch charging
-          evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
+          // evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
+          evseWrite("evseStatus", "active");
         }
         else if (evseStatus >= 3) // Charging
         {
           // set curentAmp to 0
           // Need to stop charging. Send 0 tu actual current
-          evseUpdatePower(0, FORCE_CURRENT);
+          // evseUpdatePower(0, FORCE_CURRENT);
+          evseWrite("evseStatus", "disactive");
         }
       }
       else if (page == 2)
@@ -1621,7 +1652,7 @@ void loop()
     if (evseStatus > 0 && evseStatus < 2)
     {
       evseUpdatePower(evsePowerOnLimit, NORMAL_STATE); // If we force stoping or starting charging EV and autostart is on or off. this things permit to reset value to the normal    
-      
+      //evseWrite("evseStatus", "disactive"); 
     }
 
     screenDefault(0);
