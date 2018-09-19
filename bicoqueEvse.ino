@@ -67,7 +67,8 @@ int evseStatusCounter = 0;
 int evseConnectionProblem = 0;
 #define NORMAL_STATE 0
 #define FORCE_CURRENT 1
-
+#define EVSE_ACTIVE 0
+#define EVSE_DISACTIVE 1
 
 
 // config
@@ -504,11 +505,11 @@ void evseWrite(String evseRegister, int value)
    else if (evseRegister == "evseStatus")
    {
 	int valueToWrite;
-	if (value == "active")
+	if (value == EVSE_ACTIVE)
 	{
 		valueToWrite = 0;
 	}
-	else if (value == "disactive")
+	else if (value == EVSE_DISACTIVE)
         {
                 // valueToWrite = 8192; //-- disactive EVSE after charge
                 valueToWrite = 16384; //-- disactive EVSE
@@ -953,13 +954,13 @@ void webWrite()
     {
       message += "chargeOn found : -"; message += chargeOn; message += "-\n";
       //evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
-      evseWrite("evseStatus", "active");
+      evseWrite("evseStatus", EVSE_ACTIVE);
     }
     if (chargeOff != "")
     {
       message += "chargeOff found : -"; message += chargeOff; message += "-\n";
       //evseUpdatePower(0, FORCE_CURRENT);
-      evseWrite("evseStatus", "disactive");
+      evseWrite("evseStatus", EVSE_DISACTIVE);
     }
     if (registerNumber != "" && value != "")
     {
@@ -1488,7 +1489,7 @@ void loop()
           {
             // so in long pressed button, need to launch the start
             // evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
-            evseWrite("evseStatus", "active");
+            evseWrite("evseStatus", EVSE_ACTIVE);
           }
         }
         else if (evseStatus == 2) // EV present
@@ -1496,14 +1497,14 @@ void loop()
           // set curentAmp with the powerOnAmp
           // never be in this case with the firmware we have. but if long press, set current to launch charging
           // evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
-          evseWrite("evseStatus", "active");
+          evseWrite("evseStatus", EVSE_ACTIVE);
         }
         else if (evseStatus >= 3) // Charging
         {
           // set curentAmp to 0
           // Need to stop charging. Send 0 tu actual current
           // evseUpdatePower(0, FORCE_CURRENT);
-          evseWrite("evseStatus", "disactive");
+          evseWrite("evseStatus", EVSE_DISACTIVE);
         }
       }
       else if (page == 2)
