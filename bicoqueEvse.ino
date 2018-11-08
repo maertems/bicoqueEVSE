@@ -19,9 +19,9 @@ ModbusMaster232 node(1);
 
 
 // firmware version
-#define SOFT_VERSION "1.4.59"
-#define SOFT_DATE "2018-09-06"
-#define EVSE_VERSION 7
+#define SOFT_VERSION "1.4.60"
+#define SOFT_DATE "2018-11-09"
+#define EVSE_VERSION 10
 
 // address for EEPROM
 #define WIFIENABLE 0
@@ -443,6 +443,11 @@ void evseAllInfo()
      tempValue += registerResult ;
      evseRegisters[i] = tempValue;
 
+     if (i == 2)
+     {
+     	String messageToLog = "Read%20register%20:%20"; messageToLog += registers[i]; messageToLog += "%20-%20value%20:%20"; messageToLog += registerResult ;
+   	logger2(messageToLog);
+     }
      //Serial.print("Debug : "); Serial.println(evseRegisters[i]);
      //delay(100);
   }
@@ -529,6 +534,10 @@ void evseWrite(String evseRegister, int value)
     Serial.println("No register given... exit");
     return;
    }
+
+
+   String messageToLog = "Write%20register%20:%20"; messageToLog += RegisterToWriteIn; messageToLog += "%20-%20value%20:%20"; messageToLog += value ;
+   logger2(messageToLog);
 
    node.setTransmitBuffer(0, value);
    node.writeMultipleRegisters(RegisterToWriteIn, 1); 
