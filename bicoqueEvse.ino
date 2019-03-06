@@ -2,7 +2,6 @@
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
 
-
 // modbus
 #include <ModbusMaster232.h> 
 
@@ -12,6 +11,7 @@
 
 #include <ESP8266httpUpdate.h>
 #include <EEPROM.h>
+#include <ArduinoJson.h>
 
 
 // Instantiate ModbusMaster object as slave ID 1
@@ -19,8 +19,8 @@ ModbusMaster232 node(1);
 
 
 // firmware version
-#define SOFT_VERSION "1.4.60"
-#define SOFT_DATE "2018-11-09"
+#define SOFT_VERSION "1.4.68"
+#define SOFT_DATE "2019-03-06"
 #define EVSE_VERSION 10
 
 // address for EEPROM
@@ -56,6 +56,7 @@ ESP8266WebServer server(80);
 
 
 // EVSE info
+char* evseStatusName[] = { "n/a", "Waiting Car","Car Connected","Charging","Charging" } ;
 String evseRegisters[23]; // indicate the number of registers
 int registers[] = { 1000,1001,1002,1003,1004,1005,1006,2000,2001,2002,2003,2004,2005,2006,2007,2010,2011,2012,2013,2014,2015,2016,2017 };
 int simpleEvseVersion ; // need to have it to check a begining and not start if it's not the same
@@ -91,6 +92,10 @@ int sleepMode = 0;
 
 // Screen LCD 
 LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 20 chars and 4 line display
+
+
+// Json allocation
+StaticJsonDocument<200> jsonBuffer;
 
 // screen default page
 int page = 0;
@@ -824,11 +829,12 @@ void webRoot() {
   message += "On power on Limit : "; message += evsePowerOnLimit; message += "A<br>";
   message += "Actual Limit : "; message += evseCurrentLimit; message += "A<br>";
   message += "EVSE status : ";
-  if (evseStatus == 1) { message += "ready"; }
-  else if (evseStatus == 2) { message += "EV is present"; }
-  else if (evseStatus == 3) { message += "charging"; }
-  else if (evseStatus == 4) { message += "charging with ventillation"; }
-  else if (evseStatus == 0) { message += "EVSE not connected"; }
+  message += evseStatusName[ evseStatus ];
+//  if (evseStatus == 1) { message += "ready"; }
+//  else if (evseStatus == 2) { message += "EV is present"; }
+//  else if (evseStatus == 3) { message += "charging"; }
+//  else if (evseStatus == 4) { message += "charging with ventillation"; }
+//  else if (evseStatus == 0) { message += "EVSE not connected"; }
   message += "<br><br>";
 
   message += "Wifi power : "; message += WiFi.RSSI(); message +="<br>";
@@ -883,6 +889,7 @@ void webJsonInfo()
   message += "  \"wifiSignal\": \""; message += WiFi.RSSI(); ; message += "\",\n";
   message += "  \"uptime\": \""; message += timestamp ; message += "\",\n";
   message += "  \"time\": \""; message += timestamp + timeAtStarting ; message += "\",\n";
+  message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\",\n";
 
 
   message += "  \"status\": \""; message += evseStatus; message += "\"\n";
@@ -900,6 +907,68 @@ void webReboot()
 
   ESP.restart();
 }  
+
+void webApiStatus()
+{
+  String message = "{\n";
+
+  if ( server.method() == HTTP_GET )
+  {
+        message += "  \"status\": \""; message += evseStatus ; message += "\",\n";
+        message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\"\n}\n";
+  }
+  else
+  {
+    // For POST
+    DeserializationError error = deserializeJson(jsonBuffer, server.arg(0));
+    if (error)
+    {
+      message += "\"message\": \"JSON parsing failed!\"\n}\n";
+    }
+    else
+    {
+      const char* actionValue = jsonBuffer["action"];
+      if (actionValue == "on")
+      {
+        evseWrite("evseStatus", EVSE_ACTIVE);
+      }
+      if (actionValue == "off")
+      {
+        evseWrite("evseStatus", EVSE_DISACTIVE);
+      }
+      message += "  \"action\": \""; message += actionValue ; message += "\"\n}\n";
+    }
+  }
+
+  server.send(200, "application/json", message);
+}
+
+void webApiPower()
+{
+  String message = "{\n";
+
+  if ( server.method() == HTTP_GET )
+  {
+        message += "  \"status\": \""; message += evseCurrentLimit ; message += "\"\n}\n";
+  }
+  else
+  {
+    // For POST
+    DeserializationError error = deserializeJson(jsonBuffer, server.arg(0)); 
+    if (error) 
+    {
+      message += "\"message\": \"JSON parsing failed!\"\n}\n";
+    }
+    else
+    {
+      int actionValue = jsonBuffer["action"];
+      evseUpdatePower(actionValue, NORMAL_STATE);
+      message += "  \"action\": \""; message += actionValue ; message += "\"\n}\n";
+    }
+  }
+
+  server.send(200, "application/json", message);
+}
 
 void webNotFound(){
   String message = "File Not Found\n\n";
@@ -1315,6 +1384,8 @@ void setup()
       server.on("/debug",webDebug);
       server.on("/reboot",webReboot);
       server.on("/jsonInfo",webJsonInfo);
+      server.on("/api/status",webApiStatus);
+      server.on("/api/power",webApiPower);
       ip = WiFi.localIP();
     }
     else if (wifiMode == 2) // AP mode for config
