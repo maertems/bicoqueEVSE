@@ -16,12 +16,14 @@
 
 // Instantiate ModbusMaster object as slave ID 1
 ModbusMaster232 node(1);
-
+// ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_VERSION "1.4.68"
-#define SOFT_DATE "2019-03-06"
-#define EVSE_VERSION 10
+#define SOFT_VERSION "1.4.71"
+#define SOFT_DATE "2019-03-18"
+#define EVSE_VERSION 11
+
+#define DEBUG 0
 
 // address for EEPROM
 #define WIFIENABLE 0
@@ -56,14 +58,15 @@ ESP8266WebServer server(80);
 
 
 // EVSE info
-char* evseStatusName[] = { "n/a", "Waiting Car","Car Connected","Charging","Charging" } ;
-String evseRegisters[23]; // indicate the number of registers
-int registers[] = { 1000,1001,1002,1003,1004,1005,1006,2000,2001,2002,2003,2004,2005,2006,2007,2010,2011,2012,2013,2014,2015,2016,2017 };
+char* evseStatusName[] = { "n/a", "Waiting Car","Car Connected","Charging","Charging", "Error" } ;
+String evseRegisters[25]; // indicate the number of registers
+int registers[] = { 1000,1001,1002,1003,1004,1005,1006,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017 };
 int simpleEvseVersion ; // need to have it to check a begining and not start if it's not the same
 int evseCurrentLimit  = 0;
 int evsePowerOnLimit  = 0;
 int evseHardwareLimit = 0;
 int evseStatus        = 0;
+int evseEnable        = 0;
 int evseStatusCounter = 0;
 int evseConnectionProblem = 0;
 #define NORMAL_STATE 0
@@ -92,6 +95,7 @@ int sleepMode = 0;
 
 // Screen LCD 
 LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 20 chars and 4 line display
+// Using ports SDCLK / SDA / SCL / VCC +5V / GND
 
 
 // Json allocation
@@ -223,14 +227,16 @@ void getMenu(int action)
   int menuTemp;
   int valueSelecting = 0;
 
-  //printf("Menu : %d", menu); //printf(" / action : "); printf(action); printf("\n");
-
   // Need to check select action
   if (action == MENU_SELECT)
   {
     int fnret = menuGetFromAction();
     if (fnret == 0) { return; } // Exit wanted
-    //printf("Value to store : %s\n", menuValue);
+
+    if (DEBUG > 0)
+    {
+      printf("Value to store : %s\n", menuValue);
+    }
   }
 
   // set array to generic one
@@ -242,20 +248,6 @@ void getMenu(int action)
   {
     menuTemp = 10; itemsToPrint = NUMITEMS(menu2); for ( int i =0 ; i < itemsToPrint ; i++) { menuToPrint[i] = menu2[i]; }
   }
-  /*
-  else if (menuStatus >= 20 && menuStatus < 30)
-  {
-        menuTemp = 20; itemsToPrint = NUMITEMS(menu3); for ( int i =0 ; i < itemsToPrint ; i++) { menuToPrint[i] = menu3[i]; }
-  }
-  else if (menuStatus >= 30 && menuStatus < 40)
-  {
-        menuTemp = 30; itemsToPrint = NUMITEMS(menu4); for ( int i =0 ; i < itemsToPrint ; i++) { menuToPrint[i] = menu4[i]; }
-  }
-  else if (menuStatus >= 40 && menuStatus < 50)
-  {
-        menuTemp = 40; itemsToPrint = NUMITEMS(menu5); for ( int i =0 ; i < itemsToPrint ; i++) { menuToPrint[i] = menu5[i]; }
-  }
-  */
   else if (menuStatus >= 100 && menuStatus < 200)
   {
     menuTemp = 100; itemsToPrint = NUMITEMS(enum101); for ( int i =0 ; i < itemsToPrint ; i++) { menuToPrint[i] = enum101[i]; }
@@ -283,8 +275,11 @@ void getMenu(int action)
     for ( int i =0 ; i < itemsToPrint ; i++) 
     {
       menuToPrint[i] = evseRegisters[i];
-      //Serial.print("pointer address : "); Serial.println((long)&menuToPrint[i]);
-      //Serial.print(i); Serial.print(" ----> "); Serial.println(menuToPrint[i]);
+      if (DEBUG > 0)
+      {
+        Serial.print("pointer address : "); Serial.println((long)&menuToPrint[i]);
+        Serial.print(i); Serial.print(" ----> "); Serial.println(menuToPrint[i]);
+      }
     }
     valueSelecting = 3;
   }
@@ -298,17 +293,8 @@ void getMenu(int action)
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print(menuToPrint[0]);
-  
-  /*
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.println(menuToPrint[0]);
-  display.drawLine(0, 9, 125, 9, WHITE);
-  display.setCursor(0,11);1
-  */
-  
+ 
+ 
   if (valueSelecting == 0)
   {
     int screenCursor = 1;
@@ -333,9 +319,6 @@ void getMenu(int action)
         {
           lcd.setCursor( 1, screenCursor);
           lcd.write(0);
-  //      display.setTextColor(BLACK, WHITE);
-  //      display.println(temp2);
-  //      display.setTextColor(WHITE);
         }
         else
         {
@@ -345,20 +328,14 @@ void getMenu(int action)
       }
 
       screenCursor++;
-  //      display.println(temp2);
-      
     }
   }
   else if (valueSelecting == 1)
   {
-//    display.println("");
-//    display.println("");
-//    display.println("");
     char temp2[20] = "                   ";
     int tempLength = menuToPrint[(menuStatus - menuTemp)].length();
     int lenghToAdd = 19-tempLength;
     for (int j = 0; j < tempLength ; j++) { temp2[(j+lenghToAdd)] = menuToPrint[(menuStatus - menuTemp)][j]; }
-//    display.println(temp2);
     lcd.setCursor(0, 1);
     lcd.print(temp2);
   }
@@ -366,7 +343,6 @@ void getMenu(int action)
   {
     for (int i = 1; i< itemsToPrint; i++)
     {
-      //char temp2[22] = "                     ";
       char temp2[22] = "";
       int tempLength = menuToPrint[i].length(); //strlen(menuToPrint[i]);
       int lenghToAdd = 21-tempLength;
@@ -377,14 +353,7 @@ void getMenu(int action)
       {
         lcd.setCursor(20-tempLength , 3);
         lcd.print(temp2);
-//        display.setTextColor(BLACK, WHITE);
-//        display.println(temp2);
-//        display.setTextColor(WHITE);
       } 
-      else 
-      { 
-//         display.println(temp2);
-      }
     }
   }
   else if (valueSelecting == 3)
@@ -401,8 +370,6 @@ void getMenu(int action)
 
     menuStatus = menuTemp + beginArray + 4;
   }
-  
-//  display.display();
 }
 
 
@@ -418,23 +385,21 @@ void getMenu(int action)
 // ********************************************
 void evseReload()
 {
-  //return;
   node.readHoldingRegisters(1000, 1);
   evseCurrentLimit = node.getResponseBuffer(0);
-  //delay(100);
   node.clearResponseBuffer();
   node.readHoldingRegisters(1002, 1);
   evseStatus = node.getResponseBuffer(0);
-  //delay(100);
   node.clearResponseBuffer();
   node.readHoldingRegisters(1003, 1);
   evseHardwareLimit = node.getResponseBuffer(0);
-  //delay(100);
   node.clearResponseBuffer();
   node.readHoldingRegisters(2000, 1);
   evsePowerOnLimit = node.getResponseBuffer(0);
-  //delay(100);
   node.clearResponseBuffer();
+
+  evseEnableCheck();
+
 }
 void evseAllInfo()
 {
@@ -451,19 +416,50 @@ void evseAllInfo()
      if (i == 2)
      {
      	String messageToLog = "Read%20register%20:%20"; messageToLog += registers[i]; messageToLog += "%20-%20value%20:%20"; messageToLog += registerResult ;
-   	logger2(messageToLog);
+   	logger(messageToLog);
      }
-     //Serial.print("Debug : "); Serial.println(evseRegisters[i]);
-     //delay(100);
+     if (DEBUG)
+     {
+       Serial.print("Debug : "); Serial.println(evseRegisters[i]);
+      delay(100);
+     }
   }
-  //for (int i = 0; i < 20; i++) { Serial.print(i); Serial.print(" - "); Serial.println(evseRegisters[i]); }
+  if (DEBUG)
+  {
+    for (int i = 0; i < 20; i++) { Serial.print(i); Serial.print(" - "); Serial.println(evseRegisters[i]); }
+  }
 }
 void evseStatusCheck()
 {
   node.readHoldingRegisters(1002, 1);
   evseStatus = node.getResponseBuffer(0);
-  //delay(100);
   node.clearResponseBuffer();
+}
+void evseEnableCheck()
+{
+  node.readHoldingRegisters(2005, 1);
+  int registerValue = node.getResponseBuffer(0);
+  node.clearResponseBuffer();
+
+  if (registerValue == 0)
+  {
+    // enable
+    evseEnable = 1;
+  }
+  else if (registerValue == 16384)
+  {
+    // disable
+    evseEnable = 0;
+  }
+  else if (registerValue == 8192)
+  {
+    // disable after charge
+    evseEnable = 1;
+  }
+  else
+  {
+    evseEnable = 255;
+  }
 }
 void evseUpdatePower(int power, int currentOnly)
 {
@@ -542,11 +538,10 @@ void evseWrite(String evseRegister, int value)
 
 
    String messageToLog = "Write%20register%20:%20"; messageToLog += RegisterToWriteIn; messageToLog += "%20-%20value%20:%20"; messageToLog += value ;
-   logger2(messageToLog);
+   logger(messageToLog);
 
    node.setTransmitBuffer(0, value);
    node.writeMultipleRegisters(RegisterToWriteIn, 1); 
-   //delay(100); // Do not DDoS modbus :)
    
   evseReload();
 }
@@ -612,8 +607,11 @@ String eepromRead(int startAddress, int bytes)
   {
       stringRead += char(EEPROM.read(startAddress + i));
   }
-  
-  //Serial.print("Debug eeprom: read address : "); Serial.print(startAddress); Serial.print(" - string : "); Serial.println(stringRead);
+
+  if (DEBUG)
+  {  
+    Serial.print("Debug eeprom: read address : "); Serial.print(startAddress); Serial.print(" - string : "); Serial.println(stringRead);
+  }
   return stringRead;
 }
 
@@ -625,7 +623,10 @@ int eepromWrite(int startAddress, String stringToWrite)
   } 
   EEPROM.commit();
 
-  Serial.print("Debug eeprom: write address : "); Serial.print(startAddress); Serial.print(" - string : "); Serial.println(stringToWrite);
+  if (DEBUG)
+  {
+    Serial.print("Debug eeprom: write address : "); Serial.print(startAddress); Serial.print(" - string : "); Serial.println(stringToWrite);
+  }
   return 1;
 }
 int eepromClear(int startAddress, int clearSize)
@@ -689,7 +690,6 @@ void eepromReadString(int offset, int bytes, char *buf){
 
 void eepromWriteString(int offset, int bytes, char *buf){
   char c = 0;
-  //int len = (strlen(buf) < bytes) ? strlen(buf) : bytes;
   for (int i = 0; i < bytes; i++) {
     c = buf[i];
     EEPROM.write(offset + i, c); 
@@ -748,12 +748,7 @@ void screenDefault(int page)
   Serial.println("enter screen default");
   
   lcd.clear();
-
-  //lcd.write(3);
   lcd.home();
-
-  //lcd.setCursor(4,0);
-  //lcd.print("bicoque EVSE");
     
   String statusLine3;
   String statusLine1;
@@ -804,8 +799,6 @@ void screenDefault(int page)
       lcd.setCursor(0,1);lcd.print("IP: "); lcd.print(ip);
       lcd.setCursor(0,2);lcd.print("Amps : "); lcd.print(evsePowerOnLimit); lcd.print("A / "); lcd.print(evseCurrentLimit); lcd.print("A");
       lcd.setCursor(0,3);lcd.print("Conso: "); lcd.print(int(consumptionTotal/1000)); lcd.print("kWh");
-      //display.print("Current Amps : "); display.print(evseCurrentLimit); display.println("A");
-      //display.print("PowerOn Amps : "); display.print(evsePowerOnLimit); display.println("A");
       break;
     case 2:
       lcd.setCursor(0,2);lcd.print("   SETTINGS");
@@ -830,11 +823,6 @@ void webRoot() {
   message += "Actual Limit : "; message += evseCurrentLimit; message += "A<br>";
   message += "EVSE status : ";
   message += evseStatusName[ evseStatus ];
-//  if (evseStatus == 1) { message += "ready"; }
-//  else if (evseStatus == 2) { message += "EV is present"; }
-//  else if (evseStatus == 3) { message += "charging"; }
-//  else if (evseStatus == 4) { message += "charging with ventillation"; }
-//  else if (evseStatus == 0) { message += "EVSE not connected"; }
   message += "<br><br>";
 
   message += "Wifi power : "; message += WiFi.RSSI(); message +="<br>";
@@ -852,24 +840,24 @@ void webDebug()
   message += "<html>";
  
   message += "Bicoque EVSE - debug -<a href='/reload'>reload</a> "; 
-  message += "<br><br>";
+  message += "<br><br>\n";
 
   int itemsToPrint = NUMITEMS(evseRegisters);
   for ( int i =0 ; i < itemsToPrint ; i++) 
   {
-    message += evseRegisters[i]; message += "<br>";
+    message += evseRegisters[i]; message += "<br>\n";
   }
-  message += "<br>";
+  message += "<br>\n";
 
-  message += "<form action='/write' method='GET'>Amperage (0-80): <input type=text name=amperage><input type=submit></form><br>";
-  message += "<form action='/write' method='GET'>Modbus (0-1) : <input type=text name=modbus><input type=submit></form><br>";
-  message += "<form action='/write' method='GET'>Raw write : Register : <input type=text name=register> / Value : <input type=text name=value><input type=submit></form><br>";
-  message += "<form action='/write' method='GET'>Start Charging: <input type=hidden name=chargeon value=yes><input type=submit></form><br>";
-  message += "<form action='/write' method='GET'>Stop Charging: <input type=hidden name=chargeoff value=yes><input type=submit></form><br>";
-  message += "<br><br>";
-  message += "<a href='/reboot'>Rebbot device</a><br>";
+  message += "<form action='/write' method='GET'>Amperage (0-80): <input type=text name=amperage><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>Modbus (0-1) : <input type=text name=modbus><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>Raw write : Register : <input type=text name=register> / Value : <input type=text name=value><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>Start Charging: <input type=hidden name=chargeon value=yes><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>Stop Charging: <input type=hidden name=chargeoff value=yes><input type=submit></form><br>\n";
+  message += "<br><br>\n";
+  message += "<a href='/reboot'>Rebbot device</a><br>\n";
   
-  message += "</html>";
+  message += "</html>\n";
   server.send(200, "text/html", message);
 }
 void webJsonInfo()
@@ -890,6 +878,7 @@ void webJsonInfo()
   message += "  \"uptime\": \""; message += timestamp ; message += "\",\n";
   message += "  \"time\": \""; message += timestamp + timeAtStarting ; message += "\",\n";
   message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\",\n";
+  message += "  \"enable\": \""; message += evseEnable ; message += "\",\n";
 
 
   message += "  \"status\": \""; message += evseStatus; message += "\"\n";
@@ -902,7 +891,7 @@ void webReboot()
   String message = "<!DOCTYPE HTML>";
   message += "<html>";
   message += "Rebbot in progress...<b>";
-  message += "</html>";
+  message += "</html>\n";
   server.send(200, "text/html", message);
 
   ESP.restart();
@@ -914,8 +903,8 @@ void webApiStatus()
 
   if ( server.method() == HTTP_GET )
   {
-        message += "  \"status\": \""; message += evseStatus ; message += "\",\n";
-        message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\"\n}\n";
+        message += "  \"status\": \""; message += evseEnable ; message += "\",\n";
+        message += "  \"statusCar\": \""; message += evseStatusName[ evseStatus ] ; message += "\"\n}\n";
   }
   else
   {
@@ -927,14 +916,16 @@ void webApiStatus()
     }
     else
     {
-      const char* actionValue = jsonBuffer["action"];
+      String actionValue = jsonBuffer["action"];
       if (actionValue == "on")
       {
         evseWrite("evseStatus", EVSE_ACTIVE);
+        message += "  \"msg\": \"Write on done : "; message += actionValue ; message += "\",\n";
       }
       if (actionValue == "off")
       {
         evseWrite("evseStatus", EVSE_DISACTIVE);
+        message += "  \"msg\": \"Write off done : "; message += actionValue ; message += "\",\n";
       }
       message += "  \"action\": \""; message += actionValue ; message += "\"\n}\n";
     }
@@ -980,7 +971,7 @@ void webNotFound(){
   message += server.args();
   message += "\n";
   for (uint8_t i=0; i<server.args(); i++){
-    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+    message += " Name: " + server.argName(i) + " - Value: " + server.arg(i) + "\n";
   }
   server.send(404, "text/plain", message);
 }
@@ -1064,12 +1055,9 @@ void webWrite()
       message += "read memory : "; message += eepromRead ; message += " - result : "; message += result ; message += "\n";
     }
     
-    //delay(100);
     Serial.println("Write done");
     message += "Write done...\n";
     server.send(200, "text/plain", message);
-    //evseReload();
-    //webRoot();
 }
 void webInitRoot()
 {
@@ -1078,13 +1066,13 @@ void webInitRoot()
   message += "<html>";
  
   message += "Bicoque EVSE"; 
-  message += "<br><br>";
+  message += "<br><br>\n";
   
-  message += "Please configure your Wifi : <br>";
-  message += "<p>";
+  message += "Please configure your Wifi : <br>\n";
+  message += "<p>\n";
   message += wifiList;
-  message += "</p><form method='get' action='setting'><label>SSID: </label><input name='ssid' length=32><input name='pass' length=64><input type='submit'></form>";
-  message += "</html>";
+  message += "</p>\n<form method='get' action='setting'><label>SSID: </label><input name='ssid' length=32><input name='pass' length=64><input type='submit'></form>\n";
+  message += "</html>\n";
   server.send(200, "text/html", message);
 }
 void webInitSetting()
@@ -1119,7 +1107,9 @@ void webInitSetting()
           EEPROM.commit();
           content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
           statusCode = 200;
-        } else {
+        } 
+        else 
+        {
           content = "{\"Error\":\"404 not found\"}";
           statusCode = 404;
           Serial.println("Sending 404");
@@ -1200,29 +1190,10 @@ void logger(String message)
   {
     HTTPClient httpClient;
     String urlTemp ;
-    urlTemp += "http://mangue.net/ota/esp/bicoqueEvse/log.php?message=\"";
-    urlTemp += message;
-    urlTemp += "\"";
-  
-    //httpClient.begin(urlTemp);
-    httpClient.begin("http://mangue.net/ota/esp/bicoqueEvse/log.php");
-    httpClient.GET();
-    httpClient.end();
-  }
-}
-
-void logger2(String message)
-{
-  if (wifiEnable)
-  {
-    HTTPClient httpClient;
-    String urlTemp ;
     urlTemp += "http://mangue.net/ota/esp/bicoqueEvse/log.php?message=";
     urlTemp += message;
-    //urlTemp += "'";
   
     httpClient.begin(urlTemp);
-    //httpClient.begin("http://mangue.net/ota/esp/bicoqueEvse/log.php?message=ici");
     httpClient.GET();
     httpClient.end();
   }
@@ -1294,14 +1265,15 @@ void setup()
   // all stats
   consumptionTotal = (eepromReadInt(STATS_TOTAL) * 1000) + eepromReadInt(STATS_TOTAL_CENTS) ;
   
-/*
-  Serial.println("Config info :");
-  Serial.print("wifiEnable : "); Serial.println(wifiEnable);
-  Serial.print("wifiSsid : '"); Serial.print(wifiSsid); Serial.println("'");
-  Serial.print("  sizeof : "); Serial.println(sizeof(wifiSsid));
-  Serial.print("alreadyBoot : "); Serial.println(alreadyBoot);
-  Serial.print("autoStart : "); Serial.println(evseAutoStart);
-*/
+  if (DEBUG)
+  {
+    Serial.println("Config info :");
+    Serial.print("wifiEnable : "); Serial.println(wifiEnable);
+    Serial.print("wifiSsid : '"); Serial.print(wifiSsid); Serial.println("'");
+    Serial.print("  sizeof : "); Serial.println(sizeof(wifiSsid));
+    Serial.print("alreadyBoot : "); Serial.println(alreadyBoot);
+    Serial.print("autoStart : "); Serial.println(evseAutoStart);
+  }
 
   if (alreadyBoot == 0 && wifiEnable == 0)
   {
@@ -1311,7 +1283,6 @@ void setup()
 
   // Define Pins for button
   pinMode(inPin, INPUT_PULLUP);
-  //digitalWrite();
 
   int wifiMode = 0;
   String wifiList;
@@ -1436,9 +1407,9 @@ void setup()
 
     // get time();
     getTimeOnStartup();
-    logger2("Starting%20bicoqueEvse");
+    logger("Starting%20bicoqueEvse");
     String messageToLog = "ConsoTotalg%20:%20"; messageToLog += consumptionTotal; messageToLog += "%20-%20"; messageToLog += SOFT_VERSION ; messageToLog += "%20"; messageToLog += SOFT_DATE;
-    logger2(messageToLog);
+    logger(messageToLog);
   }
 
   lcd.setCursor(1,1);
@@ -1456,28 +1427,6 @@ void setup()
   {
     eepromWrite(ALREADYBOOT, "1");
   }
-
-
-  // debug local
-  /*
-  evseAllInfo();
-
-  char* menuToPrint[30] ;
-  int itemsToPrint = NUMITEMS(evseRegisters); 
-  for ( int i =0 ; i < itemsToPrint ; i++) 
-  { 
-    String tempValue = evseRegisters[i];
-    char tempChar[30];
-    tempValue.toCharArray(tempChar, 30);
-    menuToPrint[i] = tempChar; 
-    Serial.print("copy : "); 
-    Serial.print(tempChar);
-    Serial.print(" --> ");
-    Serial.print(menuToPrint[i]); 
-    Serial.print(" --> ");
-    Serial.println(evseRegisters[i]); 
-  }
-*/
 }
 
 
@@ -1568,22 +1517,17 @@ void loop()
           else // In manuel mode
           {
             // so in long pressed button, need to launch the start
-            // evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
             evseWrite("evseStatus", EVSE_ACTIVE);
           }
         }
         else if (evseStatus == 2) // EV present
         {
-          // set curentAmp with the powerOnAmp
           // never be in this case with the firmware we have. but if long press, set current to launch charging
-          // evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
           evseWrite("evseStatus", EVSE_ACTIVE);
         }
         else if (evseStatus >= 3) // Charging
         {
-          // set curentAmp to 0
-          // Need to stop charging. Send 0 tu actual current
-          // evseUpdatePower(0, FORCE_CURRENT);
+          // Need to stop charging.
           evseWrite("evseStatus", EVSE_DISACTIVE);
         }
       }
@@ -1614,7 +1558,7 @@ void loop()
   	// maybe a connection error
   	if (evseStatus == 0)
   	{
-      //logger2("EvseStatus%20is%20set%20to%200");
+      //logger("EvseStatus%20is%20set%20to%200");
   		// If this the first time we have a problem give 1 chance for next time
   		// Maybe we can upgrade to more than 1 try
   		if (evseStatusBackup != 0 and evseConnectionProblem < 5)
@@ -1675,7 +1619,7 @@ void loop()
           eepromWriteInt(STATS_TOTAL_CENTS, consumptionToWriteCents ); // Write in memroy the total consumptions
           statsLastWrite = timestamp;
           //String messageToLog = "Write.In.Memory.periodic%20:%20"; messageToLog += consumptionToWrite; messageToLog += "KWh%20+%20"; messageToLog += consumptionToWriteCents; messageToLog += "Wh";
-          //logger2(messageToLog);
+          //logger(messageToLog);
 			}
 
 			consumptionLastTime = timestamp;
@@ -1706,7 +1650,7 @@ void loop()
       eepromWriteInt(STATS_TOTAL_CENTS, consumptionToWriteCents);                 // Write in memroy the total consumptions
                 
       String messageToLog = "Write.In.Memory.stop.charging%20:%20"; messageToLog += consumptionToWrite; messageToLog += "KWh%20+%20"; messageToLog += consumptionToWriteCents ; messageToLog += "Wh";
-      logger2(messageToLog);
+      logger(messageToLog);
 		}
 	}
   
@@ -1726,7 +1670,7 @@ void loop()
     messageToLog += evseStatusBackup;
     messageToLog += "%20to%20";
     messageToLog += evseStatus;
-    logger2(messageToLog);
+    logger(messageToLog);
 
     // only remove the power from cable if we unplug the cable.
     // We need it if the car got a programming function to heater or cold the car.
