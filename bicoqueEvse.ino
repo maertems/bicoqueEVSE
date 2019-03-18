@@ -19,7 +19,7 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_VERSION "1.4.71"
+#define SOFT_VERSION "1.4.71.2"
 #define SOFT_DATE "2019-03-18"
 #define EVSE_VERSION 11
 
@@ -1236,7 +1236,7 @@ void setup()
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print("Booting...");
-  lcd.setCursor(13,3);
+  lcd.setCursor(11,3);
   lcd.print("v"); lcd.print(SOFT_VERSION);
   
 
@@ -1293,6 +1293,8 @@ void setup()
     
     if (strcmp(wifiSsid, "") != 0)
     {
+      lcd.setCursor(1,2);
+      lcd.print("   connecting...");
       Serial.print("Wifi: Connecting to -");
       Serial.print(wifiSsid); Serial.println("-");
 
@@ -1319,6 +1321,8 @@ void setup()
     }
     else
     {
+      lcd.setCursor(1,2);
+      lcd.print("   standalone mode");
       WiFi.mode(WIFI_STA);
       WiFi.disconnect();
       WiFi.mode(WIFI_AP);
@@ -1337,6 +1341,7 @@ void setup()
     WiFi.mode(WIFI_OFF);
 
     lcd.print(" ..off");
+    delay(2000);
   }
 
 
@@ -1345,7 +1350,8 @@ void setup()
     // Start the server
     lcd.setCursor(1,1);
     lcd.print("load webserver");
-
+    lcd.setCursor(1,2);
+    lcd.print("                 ");
     
     if (wifiMode == 1) // normal mode
     {
@@ -1376,6 +1382,7 @@ void setup()
 
     lcd.setCursor(1,1);
     lcd.print("check update       ");
+    delay(1000);
     lcd.noBacklight();
     
     String updateUrl = UPDATE_URL;
@@ -1709,9 +1716,3 @@ void loop()
   delay(100); // Wait 1 sec if we are not in sleepMode
   
 }
-
-
-
-
-
-
