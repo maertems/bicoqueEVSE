@@ -20,13 +20,8 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-<<<<<<< HEAD
 #define SOFT_VERSION "1.4.73"
 #define SOFT_DATE "2019-03-20"
-=======
-#define SOFT_VERSION "1.4.71.2"
-#define SOFT_DATE "2019-03-18"
->>>>>>> 7f8752d406d99675c57a6955b1ee7f0fb2c76193
 #define EVSE_VERSION 11
 
 #define DEBUG 0
