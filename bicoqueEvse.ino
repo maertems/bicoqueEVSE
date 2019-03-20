@@ -12,6 +12,7 @@
 #include <ESP8266httpUpdate.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
+#include <FS.h>
 
 
 // Instantiate ModbusMaster object as slave ID 1
@@ -19,34 +20,21 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_VERSION "1.4.71.2"
-#define SOFT_DATE "2019-03-18"
+#define SOFT_VERSION "1.4.73"
+#define SOFT_DATE "2019-03-20"
 #define EVSE_VERSION 11
 
 #define DEBUG 0
 
 // address for EEPROM
-#define WIFIENABLE 0
-#define WIFIENABLE_SIZE 1
-#define WIFISSID 1
-#define WIFISSID_SIZE 32
-#define WIFIPASS 33
-#define WIFIPASS_SIZE 64
-#define AUTOSTART 97
-#define AUTOSTART_SIZE 1
 #define ALREADYBOOT 98
 #define ALREADYBOOT_SIZE 1
-
-#define STATS_TOTAL 200
-#define STATS_TOTAL_CENTS 202
-#define STATS_BEGIN 204
-#define STATS_END 128
-
 
 // Wifi AP info for configuration
 const char* wifiApSsid = "bicoqueEVSE";
 const char* wifiApPasswd = "randomPass";
-
+String wifiSsid;
+String wifiPasswd;
 
 
 // Update info
@@ -100,6 +88,15 @@ LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 20 chars
 
 // Json allocation
 StaticJsonDocument<200> jsonBuffer;
+String dataJsonConfig;
+DynamicJsonDocument jsonConfig(200);
+//JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
+//JsonObject jsonConfigEvse = jsonConfig.createNestedObject("evse");
+
+String dataJsonConsumption;
+DynamicJsonDocument jsonConsumption(200);
+//JsonObject jsonConsumptionDays = jsonConsumption.createNestedObject("days");
+
 
 // screen default page
 int page = 0;
@@ -133,6 +130,8 @@ int consumptionActual      = 0;
 int consumptionTotal       = 0;
 float consumptionTotalTemp = 0;
 int statsLastWrite         = 0;
+int consumptionLastCharge  = 0;
+int consumptionLastChargeRunning = 0;
 
 // Time
 long timeAtStarting = 0; // need to get from ntp server timestamp when ESP start
@@ -168,7 +167,9 @@ int menuGetFromAction(void)
     }
     
     evseUpdatePower(evsePowerOnLimit, NORMAL_STATE);
-    eepromWrite(AUTOSTART, String(evseAutoStart) );
+    jsonConfig["evse"]["autostart"] = evseAutoStart;
+    configSave();
+    // eepromWrite(AUTOSTART, String(evseAutoStart) );
   }
   else if (menuStatus >= 300 && menuStatus <400)
   {
@@ -180,8 +181,9 @@ int menuGetFromAction(void)
       WiFi.mode(WIFI_OFF); 
       WiFi.disconnect();
     }
-    
-    eepromWrite(WIFIENABLE, String(wifiEnable) );
+   
+    jsonConfig["wifi"]["enable"] = wifiEnable;
+    configSave();
   }
   else if (menuStatus >= 400 && menuStatus <500)
   {
@@ -415,7 +417,7 @@ void evseAllInfo()
 
      if (i == 2)
      {
-     	String messageToLog = "Read%20register%20:%20"; messageToLog += registers[i]; messageToLog += "%20-%20value%20:%20"; messageToLog += registerResult ;
+     	String messageToLog = "Read register : "; messageToLog += registers[i]; messageToLog += " - value : "; messageToLog += registerResult ;
    	logger(messageToLog);
      }
      if (DEBUG)
@@ -537,7 +539,7 @@ void evseWrite(String evseRegister, int value)
    }
 
 
-   String messageToLog = "Write%20register%20:%20"; messageToLog += RegisterToWriteIn; messageToLog += "%20-%20value%20:%20"; messageToLog += value ;
+   String messageToLog = "Write register : "; messageToLog += RegisterToWriteIn; messageToLog += " - value : "; messageToLog += value ;
    logger(messageToLog);
 
    node.setTransmitBuffer(0, value);
@@ -697,11 +699,67 @@ void eepromWriteString(int offset, int bytes, char *buf){
   EEPROM.commit();
 }
 
+// ********************************************
+// SPIFFFS storage Functions
+// ********************************************
+// char *storageRead(char *fileName)
+String storageRead(char *fileName)
+{
+	String dataText;
+
+	File file = SPIFFS.open(fileName, "r");
+        if (!file)
+	{
+		logger("FS: opening file error");
+		//-- debug
+	}
+	else
+	{
+		size_t sizeFile = file.size();
+                if (sizeFile > 200)
+		{
+			Serial.println("Size of file is too clarge");
+		}
+		else
+		{
+			dataText = file.readString();
+			file.close();
+		}
+	}
+
+	return dataText;
+}
+
+bool storageWrite(char *fileName, String dataText)
+{
+	File file = SPIFFS.open(fileName, "w");
+	file.println(dataText);
+
+	file.close();
+
+	return true;
+}
 
 
+void consumptionSave()
+{
+	dataJsonConsumption = "";
+	serializeJson(jsonConsumption, dataJsonConsumption);
 
+	if (DEBUG) { Serial.print("write consumption : "); Serial.println(dataJsonConsumption); }
 
+	storageWrite("/consumption.json", dataJsonConsumption);
+}
 
+void configSave()
+{
+	dataJsonConfig = "";
+	serializeJson(jsonConfig, dataJsonConfig);
+
+	if (DEBUG) { Serial.print("write config : "); Serial.println(dataJsonConfig); }
+
+	storageWrite("/config.json", dataJsonConfig);
+}
 
 
 
@@ -826,6 +884,7 @@ void webRoot() {
   message += "<br><br>";
 
   message += "Wifi power : "; message += WiFi.RSSI(); message +="<br>";
+  message += "Wifi power : "; message += wifiPower(); message +="<br>";
   message +="<br>";
   
   message += "</html>";
@@ -870,11 +929,13 @@ void webJsonInfo()
 
   message += "  \"powerOn\": \""; message += evsePowerOnLimit; message += "\",\n";
   message += "  \"currentLimit\": \""; message += evseCurrentLimit; message += "\",\n";
+  message += "  \"consumptionLastCharge\": \""; message += consumptionLastCharge ; message += "\",\n";
   message += "  \"consumptionLastTime\": \""; message += consumptionLastTime ; message += "\",\n";
   message += "  \"consumptionCounter\": \""; message += consumptionCounter ; message += "\",\n";
   message += "  \"consumptions\": \""; message += consumptionTotal ; message += "\",\n";
   message += "  \"consumptionActual\": \""; message += consumptionActual ; message += "\",\n";
-  message += "  \"wifiSignal\": \""; message += WiFi.RSSI(); ; message += "\",\n";
+  message += "  \"wifiSignal\": \""; message += WiFi.RSSI(); message += "\",\n";
+  message += "  \"wifiPower\": \""; message += wifiPower() ; message += "\",\n";
   message += "  \"uptime\": \""; message += timestamp ; message += "\",\n";
   message += "  \"time\": \""; message += timestamp + timeAtStarting ; message += "\",\n";
   message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\",\n";
@@ -961,6 +1022,18 @@ void webApiPower()
   server.send(200, "application/json", message);
 }
 
+
+void webApiConfig()
+{
+
+  server.send(200, "application/json", dataJsonConfig);
+
+}
+
+
+
+
+
 void webNotFound(){
   String message = "File Not Found\n\n";
   message += "URI: ";
@@ -995,6 +1068,30 @@ void webWrite()
     String clearAll = server.arg("clearall");
     String eepromWrite = server.arg("eepromwrite");
     String eepromRead = server.arg("eepromread");
+    String autoStart = server.arg("autostart");
+    String wifiEnable = server.arg("wifienable");
+    String alreadyBoot = server.arg("alreadyboot");
+
+
+    if (autoStart != "")
+    {
+	jsonConfig["evse"]["autostart"] = autoStart;
+	configSave();
+    }
+
+    if ( wifiEnable != "")
+    {
+	jsonConfig["wifi"]["enable"] = wifiEnable;
+	configSave();
+    }
+
+    if ( alreadyBoot != "")
+    {
+	jsonConfig["alreadyBoot"] = alreadyBoot;
+	configSave();
+    }
+
+
 
     if (amp != "")
     {
@@ -1040,8 +1137,7 @@ void webWrite()
 
     if (clearAll == "yes")
     {
-      message += "clear all stats";
-      eepromClear(STATS_TOTAL, (STATS_END + 4));
+      message += "clear all stats. removed";
     }
 
     if (eepromWrite != "")
@@ -1083,28 +1179,11 @@ void webInitSetting()
         String qpass = server.arg("pass");
         if (qsid.length() > 0 && qpass.length() > 0) 
         {
-          Serial.println("clearing eeprom");
-          for (int i = 0; i < 96; ++i) { EEPROM.write(1+i, 0); }
-          Serial.println(qsid);
-          Serial.println("");
-          Serial.println(qpass);
-          Serial.println("");
-            
-          Serial.println("writing eeprom ssid:");
-          for (int i = 0; i < qsid.length(); ++i)
-            {
-              EEPROM.write(1+i, qsid[i]);
-              Serial.print("Wrote: ");
-              Serial.println(qsid[i]); 
-            }
-          Serial.println("writing eeprom pass:"); 
-          for (int i = 0; i < qpass.length(); ++i)
-            {
-              EEPROM.write(33+i, qpass[i]);
-              Serial.print("Wrote: ");
-              Serial.println(qpass[i]); 
-            }    
-          EEPROM.commit();
+
+          jsonConfig["wifi"]["ssid"] = qsid;
+          jsonConfig["wifi"]["password"] = qpass;
+          configSave();
+
           content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
           statusCode = 200;
         } 
@@ -1176,11 +1255,73 @@ String wifiScan(void)
 void wifiReset()
 {
 
-  eepromClear(WIFISSID, WIFISSID_SIZE);
-  eepromClear(WIFIPASS, WIFIPASS_SIZE);
+  jsonConfig["wifi"]["ssid"]     = "";
+  jsonConfig["wifi"]["password"] = "";
+  configSave();
 
   WiFi.mode(WIFI_OFF);
   WiFi.disconnect();
+}
+int wifiPower()
+{
+	int dBm = WiFi.RSSI();
+	int quality;
+	// dBm to Quality:
+    	if (dBm <= -100)
+	{
+        	quality = 0;
+	}
+    	else if (dBm >= -50)
+	{
+        	quality = 100;
+	}
+    	else
+	{
+        	quality = 2 * (dBm + 100);
+	}
+
+	return quality;
+}
+
+
+
+String urlencode(String str)
+{
+	String encodedString="";
+	char c;
+	char code0;
+	char code1;
+	for (int i =0; i < str.length(); i++)
+	{
+		c=str.charAt(i);
+		if (c == ' ')	
+		{
+			encodedString+= '+';
+		} 
+		else if (isalnum(c))
+		{
+			encodedString+=c;
+		}
+		else
+		{
+			code1=(c & 0xf)+'0';
+			if ((c & 0xf) >9)
+			{
+				code1=(c & 0xf) - 10 + 'A';
+			}
+			c=(c>>4)&0xf;
+			code0=c+'0';
+			if (c > 9)
+			{
+				code0=c - 10 + 'A';
+			}
+			encodedString+='%';
+			encodedString+=code0;
+			encodedString+=code1;
+		}
+	}
+
+	return encodedString;
 }
 
 
@@ -1189,10 +1330,12 @@ void logger(String message)
   if (wifiEnable)
   {
     HTTPClient httpClient;
-    String urlTemp ;
-    urlTemp += "http://mangue.net/ota/esp/bicoqueEvse/log.php?message=";
-    urlTemp += message;
+    String urlTemp = BASE_URL;
+    urlTemp += "log.php?message=";
+    urlTemp += urlencode(message);
   
+
+
     httpClient.begin(urlTemp);
     httpClient.GET();
     httpClient.end();
@@ -1210,6 +1353,9 @@ void setup()
 
   Serial.println("");
   Serial.print("Welcome to bicoqueEVSE - "); Serial.println(SOFT_VERSION);
+
+
+
 
   // Screen Init
   lcd.init();
@@ -1238,33 +1384,76 @@ void setup()
   lcd.print("Booting...");
   lcd.setCursor(11,3);
   lcd.print("v"); lcd.print(SOFT_VERSION);
-  
 
-  // eeprom get values
-  EEPROM.begin(512);
-  // wifi enable addr 0 size 1 - 0/1
-  String configWifiEnable = eepromRead(WIFIENABLE,WIFIENABLE_SIZE);
-  wifiEnable = configWifiEnable.toInt();
+  // FileSystem
+  if (SPIFFS.begin())
+  {
+	// check if we have et config file
+	if (SPIFFS.exists("/config.json"))
+	{
+		Serial.println("Config.json found. read data");
+		dataJsonConfig = storageRead("/config.json");
+		Serial.println(dataJsonConfig);
+		DeserializationError jsonError = deserializeJson(jsonConfig, dataJsonConfig);
+		if (jsonError)
+		{
+			// Getting error when deserialise... I don know what to do here...
+		}
 
-  // wifi ssid addr 1 size 32
-  String configWifiSsid = eepromRead(WIFISSID,WIFISSID_SIZE);
-  const char* wifiSsid = configWifiSsid.c_str();
-  
-  // wifi passwd addr 33 size 64
-  String configWifiPasswd = eepromRead(WIFIPASS,WIFIPASS_SIZE);
-  const char* wifiPasswd = configWifiPasswd.c_str();
+		wifiEnable = jsonConfig["wifi"]["enable"];
+		String wifiSsidTemp   = jsonConfig["wifi"]["ssid"];
+		String wifiPasswdTemp = jsonConfig["wifi"]["password"];
+		wifiSsid = wifiSsidTemp;
+ 		wifiPasswd = wifiPasswdTemp;
+		evseAutoStart = jsonConfig["evse"]["autostart"];
+		alreadyBoot   = jsonConfig["alreadyBoot"];
+	}
+	else
+	{
+		// No config found.
+		// Start in AP mode to configure
+		// debug create object here
+		Serial.println("Config.json not found. Create one");
+                wifiEnable    = 0;
+		alreadyBoot   = 0;
+                wifiSsid      = "";
+                wifiPasswd    = "";
+                evseAutoStart = 0;
 
-  // autostartCharging
-  String configAutoStart = eepromRead(AUTOSTART,AUTOSTART_SIZE);
-  evseAutoStart = configAutoStart.toInt();
+		jsonConfig["wifi"]["enable"]    = wifiEnable;
+		jsonConfig["wifi"]["ssid"]      = wifiSsid;
+		jsonConfig["wifi"]["password"]  = wifiPasswd;
+		jsonConfig["evse"]["autostart"] = evseAutoStart;
+		jsonConfig["alreadyBoot"]       = alreadyBoot;
 
-  // alreadyBoot
-  String configAlreadyBoot = eepromRead(ALREADYBOOT,ALREADYBOOT_SIZE);
-  alreadyBoot = configAlreadyBoot.toInt();
+		configSave();
+	}
 
-  // all stats
-  consumptionTotal = (eepromReadInt(STATS_TOTAL) * 1000) + eepromReadInt(STATS_TOTAL_CENTS) ;
-  
+
+	if (SPIFFS.exists("/consumption.json"))
+	{
+		dataJsonConsumption = storageRead("/consumption.json");
+		DeserializationError jsonError = deserializeJson(jsonConsumption, dataJsonConsumption);
+                if (jsonError)
+                {
+                        // Getting error when deserialise... I don know what to do here...
+                }
+
+		consumptionLastCharge = jsonConsumption["lastCharge"];
+		consumptionTotal      = jsonConsumption["total"];
+	}
+	else
+	{
+		consumptionLastCharge  = 0;
+		consumptionTotal       = 0;
+
+		jsonConsumption["lastCharge"] = consumptionLastCharge;
+		jsonConsumption["total"]      = consumptionTotal;
+	
+		consumptionSave();
+	}
+  }
+ 
   if (DEBUG)
   {
     Serial.println("Config info :");
@@ -1288,10 +1477,11 @@ void setup()
   String wifiList;
   if (wifiEnable)
   {
+    Serial.println("Enter wifi config");
     lcd.setCursor(1,1);
     lcd.print("wifi settings");
     
-    if (strcmp(wifiSsid, "") != 0)
+    if (wifiSsid.length() > 0)
     {
       lcd.setCursor(1,2);
       lcd.print("   connecting...");
@@ -1303,8 +1493,10 @@ void setup()
       WiFi.disconnect();
       WiFi.mode(WIFI_STA);
       WiFi.hostname(wifiApSsid);
-      
-      bool wifiConnected = wifiConnect(wifiSsid,wifiPasswd);
+
+      const char * login = wifiSsid.c_str();
+      const char * pass  = wifiPasswd.c_str();
+      bool wifiConnected = wifiConnect(login,pass);
 
       if (wifiConnected)
       {
@@ -1344,6 +1536,7 @@ void setup()
     delay(2000);
   }
 
+  Serial.println("End of wifi config");
 
   if (wifiEnable)
   {
@@ -1363,6 +1556,9 @@ void setup()
       server.on("/jsonInfo",webJsonInfo);
       server.on("/api/status",webApiStatus);
       server.on("/api/power",webApiPower);
+      server.on("/api/config",webApiConfig);
+
+      server.on("/setting",webInitSetting);
       ip = WiFi.localIP();
     }
     else if (wifiMode == 2) // AP mode for config
@@ -1414,8 +1610,8 @@ void setup()
 
     // get time();
     getTimeOnStartup();
-    logger("Starting%20bicoqueEvse");
-    String messageToLog = "ConsoTotalg%20:%20"; messageToLog += consumptionTotal; messageToLog += "%20-%20"; messageToLog += SOFT_VERSION ; messageToLog += "%20"; messageToLog += SOFT_DATE;
+    logger("Starting bicoqueEvse");
+    String messageToLog = "ConsoTotalg : "; messageToLog += consumptionTotal; messageToLog += " - "; messageToLog += SOFT_VERSION ; messageToLog += " "; messageToLog += SOFT_DATE;
     logger(messageToLog);
   }
 
@@ -1432,8 +1628,27 @@ void setup()
 
   if (alreadyBoot == 0)
   {
-    eepromWrite(ALREADYBOOT, "1");
+    jsonConfig["alreadyBoot"] = 1;
+    configSave();
+    // eepromWrite(ALREADYBOOT, "1");
   }
+
+ 
+  if (DEBUG)
+  {
+	Dir dir = SPIFFS.openDir("/");
+	while (dir.next())
+	{
+		logger(dir.fileName());
+		File f = dir.openFile("r");
+		String messageToLog = "size:"; messageToLog += f.size();
+		logger(messageToLog);
+	}
+
+	logger("Config : ");
+	logger(dataJsonConfig);
+  }
+
 }
 
 
@@ -1595,38 +1810,52 @@ void loop()
   }
 
 
-  // get stats for power consumption
-  if (evseStatus >= 3)
+  	// get stats for power consumption
+  	if (evseStatus >= 3)
 	{
 
 		if (consumptionLastTime == 0)
 		{
 			// need to decale all int
 			consumptionLastTime = getTime();
-      statsLastWrite      = consumptionLastTime;
+      			statsLastWrite      = consumptionLastTime;
 		}
 		else
 		{
-      consumptionActual   = evseCurrentLimit * AC_POWER ;
+      			consumptionActual   = evseCurrentLimit * AC_POWER ;
       
 			long timestamp = getTime(); // We work in seconds
 			float comsumptionInterval = (consumptionActual * ( timestamp - consumptionLastTime ) / 3600.00);
 
-			consumptionCounter += comsumptionInterval;
-	    consumptionTotal   += int(comsumptionInterval + consumptionTotalTemp);
-			consumptionTotalTemp  = comsumptionInterval + consumptionTotalTemp - int(comsumptionInterval + consumptionTotalTemp);
+			// To always display the last charge consumption
+			if (consumptionLastChargeRunning == 0)
+			{
+				consumptionLastChargeRunning  = 1;
+				consumptionLastCharge         = 0;
+			}
+			consumptionCounter           += comsumptionInterval;
+	    		consumptionTotal             += int(comsumptionInterval + consumptionTotalTemp);
+			consumptionTotalTemp          = comsumptionInterval + consumptionTotalTemp - int(comsumptionInterval + consumptionTotalTemp);
+			consumptionLastCharge        += int(comsumptionInterval + consumptionTotalTemp);
 
 			// do not write to often. Life of EEPROM is 100K commit.
 			// Write every 10mins
 			if ( (timestamp - statsLastWrite) > 600 )
 			{
-          long consumptionToWrite      = int(consumptionTotal/1000);
-          long consumptionToWriteCents = consumptionTotal - (consumptionToWrite * 1000);
-	   			eepromWriteInt(STATS_TOTAL, consumptionToWrite );                           // Write in memroy the total consumptions
-          eepromWriteInt(STATS_TOTAL_CENTS, consumptionToWriteCents ); // Write in memroy the total consumptions
-          statsLastWrite = timestamp;
-          //String messageToLog = "Write.In.Memory.periodic%20:%20"; messageToLog += consumptionToWrite; messageToLog += "KWh%20+%20"; messageToLog += consumptionToWriteCents; messageToLog += "Wh";
-          //logger(messageToLog);
+          			// long consumptionToWrite      = int(consumptionTotal/1000);
+          			// long consumptionToWriteCents = consumptionTotal - (consumptionToWrite * 1000);
+
+				jsonConsumption["lastCharge"] = consumptionLastCharge;
+				jsonConsumption["total"]      = consumptionTotal;
+				consumptionSave();
+
+          			statsLastWrite = timestamp;
+
+				if (DEBUG)
+				{
+          				String messageToLog = "Write.In.Memory.periodic : "; messageToLog += consumptionTotal; messageToLog += "Wh";
+          				logger(messageToLog);
+				}
 			}
 
 			consumptionLastTime = timestamp;
@@ -1637,27 +1866,28 @@ void loop()
 		// EVSE Stop charging
 		if (evseStatusBackup >= 3)
 		{
-      consumptionActual   = evseCurrentLimit * AC_POWER ;
+      			consumptionActual   = evseCurrentLimit * AC_POWER ;
       
-      long timestamp = getTime(); // We work in seconds
-      float comsumptionInterval = (consumptionActual * ( timestamp - consumptionLastTime ) / 3600.00);
+      			long timestamp = getTime(); // We work in seconds
+      			float comsumptionInterval = (consumptionActual * ( timestamp - consumptionLastTime ) / 3600.00);
       
-      //consumptions[0] += int(consumptionCounter);
-      consumptionTotal    += int(comsumptionInterval + consumptionTotalTemp);
-      consumptionCounter   = 0;
-      consumptionActual    = 0;
-      consumptionLastTime  = 0;
-      statsLastWrite       = 0;
-      consumptionTotalTemp = 0;
+      			//consumptions[0] += int(consumptionCounter);
+      			consumptionTotal    += int(comsumptionInterval + consumptionTotalTemp);
+      			consumptionCounter   = 0;
+      			consumptionActual    = 0;
+		        consumptionLastTime  = 0;
+		        statsLastWrite       = 0;
+		        consumptionTotalTemp = 0;
 
-      // save and clear counters
-      long consumptionToWrite      = int(consumptionTotal/1000);
-      long consumptionToWriteCents = consumptionTotal - (consumptionToWrite * 1000);
-      eepromWriteInt(STATS_TOTAL, consumptionToWrite );                           // Write in memroy the total consumptions
-      eepromWriteInt(STATS_TOTAL_CENTS, consumptionToWriteCents);                 // Write in memroy the total consumptions
+		        jsonConsumption["LastCharge"] = consumptionLastCharge;
+		        jsonConsumption["total"]      = consumptionTotal;
+		        consumptionSave();
+
+      			// long consumptionToWrite      = int(consumptionTotal/1000);
+      			// long consumptionToWriteCents = consumptionTotal - (consumptionToWrite * 1000);
                 
-      String messageToLog = "Write.In.Memory.stop.charging%20:%20"; messageToLog += consumptionToWrite; messageToLog += "KWh%20+%20"; messageToLog += consumptionToWriteCents ; messageToLog += "Wh";
-      logger(messageToLog);
+      			String messageToLog = "Write.In.Memory.stop.charging : "; messageToLog += consumptionTotal; messageToLog += "Wh ";
+      			logger(messageToLog);
 		}
 	}
   
@@ -1673,16 +1903,17 @@ void loop()
     	evseConnectionProblem = 0;
     }
 
-    String messageToLog = "Changing%20state%20from%20";
+    String messageToLog = "Changing state from ";
     messageToLog += evseStatusBackup;
-    messageToLog += "%20to%20";
+    messageToLog += " to ";
     messageToLog += evseStatus;
     logger(messageToLog);
 
     // only remove the power from cable if we unplug the cable.
     // We need it if the car got a programming function to heater or cold the car.
-    if (evseStatus > 0 && evseStatus < 2)
+    if (evseStatus == 1)
     {
+      consumptionLastChargeRunning = 0;
       evseUpdatePower(evsePowerOnLimit, NORMAL_STATE); // If we force stoping or starting charging EV and autostart is on or off. this things permit to reset value to the normal    
       //evseWrite("evseStatus", "disactive"); 
     }
