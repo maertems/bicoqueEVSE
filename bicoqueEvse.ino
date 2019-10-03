@@ -465,19 +465,8 @@ void evseEnableCheck()
 }
 void evseUpdatePower(int power, int currentOnly)
 {
-  int powerCurrent = 0;
-  // to start or stop charging when we are in non autostart mode
-  if (evseAutoStart == 1 || currentOnly == 1 || evseStatus == 3 || evseStatus == 4)
-  {
-    powerCurrent = power;
-  }
-
-  // to be test. Now we stop/start with other function.
-  powerCurrent = power;
-
-  
-  evseWrite("currentLimit", powerCurrent);
-  evseCurrentLimit = powerCurrent;
+  evseWrite("currentLimit", power);
+  evseCurrentLimit = power;
   
   if (currentOnly == 0)
   {
@@ -538,14 +527,13 @@ void evseWrite(String evseRegister, int value)
     return;
    }
 
-
    String messageToLog = "Write register : "; messageToLog += RegisterToWriteIn; messageToLog += " - value : "; messageToLog += value ;
    logger(messageToLog);
 
    node.setTransmitBuffer(0, value);
    node.writeMultipleRegisters(RegisterToWriteIn, 1); 
    
-  evseReload();
+   evseReload();
 }
 
 
@@ -702,7 +690,6 @@ void eepromWriteString(int offset, int bytes, char *buf){
 // ********************************************
 // SPIFFFS storage Functions
 // ********************************************
-// char *storageRead(char *fileName)
 String storageRead(char *fileName)
 {
 	String dataText;
@@ -1119,13 +1106,11 @@ void webWrite()
     if (chargeOn != "")
     {
       message += "chargeOn found : -"; message += chargeOn; message += "-\n";
-      //evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
       evseWrite("evseStatus", EVSE_ACTIVE);
     }
     if (chargeOff != "")
     {
       message += "chargeOff found : -"; message += chargeOff; message += "-\n";
-      //evseUpdatePower(0, FORCE_CURRENT);
       evseWrite("evseStatus", EVSE_DISACTIVE);
     }
     if (registerNumber != "" && value != "")
@@ -1333,8 +1318,6 @@ void logger(String message)
     String urlTemp = BASE_URL;
     urlTemp += "log.php?message=";
     urlTemp += urlencode(message);
-  
-
 
     httpClient.begin(urlTemp);
     httpClient.GET();
