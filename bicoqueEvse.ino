@@ -20,8 +20,8 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_VERSION "1.4.73"
-#define SOFT_DATE "2019-03-20"
+#define SOFT_VERSION "1.4.74"
+#define SOFT_DATE "2019-09-03"
 #define EVSE_VERSION 11
 
 #define DEBUG 1
@@ -84,6 +84,9 @@ int sleepMode = 0;
 // Screen LCD
 LiquidCrystal_I2C lcd(0x27, 20, 4); // set the LCD address to 0x27 for a 20 chars and 4 line display
 // Using ports SDCLK / SDA / SCL / VCC +5V / GND
+
+// Relay install on v3.3 / GND / D4
+int relayOutput = D4; // set to 0 if disactive
 
 
 // Json allocation
@@ -554,20 +557,10 @@ void evseEnableCheck()
 }
 void evseUpdatePower(int power, int currentOnly)
 {
-  int powerCurrent = 0;
-  // to start or stop charging when we are in non autostart mode
-  if (evseAutoStart == 1 || currentOnly == 1 || evseStatus == 3 || evseStatus == 4)
-  {
-    powerCurrent = power;
-  }
 
-  // to be test. Now we stop/start with other function.
-  powerCurrent = power;
-
-
-  evseWrite("currentLimit", powerCurrent);
-  evseCurrentLimit = powerCurrent;
-
+  evseWrite("currentLimit", power);
+  evseCurrentLimit = power;
+  
   if (currentOnly == 0)
   {
     evseWrite("powerOn", power);
@@ -576,57 +569,66 @@ void evseUpdatePower(int power, int currentOnly)
 }
 void evseWrite(String evseRegister, int value)
 {
-  int RegisterToWriteIn;
-  if (evseRegister == "currentLimit")
-  {
-    Serial.print("Current limit : "); Serial.println(value);
-    RegisterToWriteIn = 1000;
-  }
-  else if (evseRegister == "powerOn")
-  {
-    Serial.print("Power On : "); Serial.println(value);
-    RegisterToWriteIn = 2000;
-  }
-  else if (evseRegister == "modbus")
-  {
-    Serial.print("Set Modbus communication : "); Serial.println(value);
-    RegisterToWriteIn = 2001;
-  }
-  else if (evseRegister == "minAmpsValue")
-  {
-    // value can be 0-1-2-3-4-5
-    // default 5. Need to set 0 for set currentLimit to 0A
-    Serial.print("authorize min Amp : "); Serial.println(value);
-    RegisterToWriteIn = 2002;
-  }
-  else if (evseRegister == "evseStatus")
-  {
-    int valueToWrite;
-    if (value == EVSE_ACTIVE)
-    {
-      valueToWrite = 0;
-    }
-    else if (value == EVSE_DISACTIVE)
-    {
-      // valueToWrite = 8192; //-- disactive EVSE after charge
-      valueToWrite = 16384; //-- disactive EVSE
-    }
-    else
-    {
-      Serial.println("evseStatus not correct");
-      return;
-    }
+   int RegisterToWriteIn;
+   if (evseRegister == "currentLimit")
+   {
+        Serial.print("Current limit : "); Serial.println(value);
+        RegisterToWriteIn = 1000;
+   }
+   else if (evseRegister == "powerOn")
+   {
+        Serial.print("Power On : "); Serial.println(value);
+        RegisterToWriteIn = 2000;
+   }
+   else if (evseRegister == "modbus")
+   {
+        Serial.print("Set Modbus communication : "); Serial.println(value);
+        RegisterToWriteIn = 2001;
+   }
+   else if (evseRegister == "minAmpsValue")
+   {
+        // value can be 0-1-2-3-4-5
+        // default 5. Need to set 0 for set currentLimit to 0A
+        Serial.print("authorize min Amp : "); Serial.println(value);
+        RegisterToWriteIn = 2002; 
+   }
+   else if (evseRegister == "evseStatus")
+   {
+	int valueToWrite;
+	if (value == EVSE_ACTIVE)
+	{
+		valueToWrite = 0;
+                if (relayOutput)
+                {
+                   // There is a bug in simpleEVSE. If the EVSE is disable and the car
+                   // is plug for more than 15 mins, when we active the EVSE, nothing append.
+                   // So we will cut the link between EVSE and CAR for 2 sec for init.
+                   digitalWrite(relayOutput, HIGH);
+                   delay(2000);
+                   digitalWrite(relayOutput, LOW);
+                }
+	}
+	else if (value == EVSE_DISACTIVE)
+        {
+                // valueToWrite = 8192; //-- disactive EVSE after charge
+                valueToWrite = 16384; //-- disactive EVSE
+        }
+	else
+	{
+		Serial.println("evseStatus not correct");
+		return;
+	}
 
-    value = valueToWrite;
-    Serial.print("evseStatus, witre value into 2005 register : "); Serial.println(value);
-    RegisterToWriteIn = 2005;
-  }
-  else
-  {
+	value = valueToWrite;
+	Serial.print("evseStatus, witre value into 2005 register : "); Serial.println(value);
+	RegisterToWriteIn = 2005;
+   }
+   else
+   {
+
     Serial.println("No register given... exit");
     return;
   }
-
 
   String messageToLog = "Write register : "; messageToLog += RegisterToWriteIn; messageToLog += " - value : "; messageToLog += value ;
   logger(messageToLog);
@@ -791,7 +793,6 @@ void eepromWriteString(int offset, int bytes, char *buf) {
 // ********************************************
 // SPIFFFS storage Functions
 // ********************************************
-// char *storageRead(char *fileName)
 String storageRead(char *fileName)
 {
   String dataText;
@@ -1190,7 +1191,6 @@ void webWrite()
   }
 
 
-
   if (amp != "")
   {
     message += "amp found\n";
@@ -1438,8 +1438,6 @@ void logger(String message)
     urlTemp += "log.php?message=";
     urlTemp += urlencode(message);
 
-
-
     httpClient.begin(urlTemp);
     httpClient.GET();
     httpClient.end();
@@ -1458,7 +1456,12 @@ void setup()
   Serial.println("");
   Serial.print("Welcome to bicoqueEVSE - "); Serial.println(SOFT_VERSION);
 
-
+  // relay Init
+  if (relayOutput)
+  {
+    pinMode(relayOutput, OUTPUT);
+    digitalWrite(relayOutput, LOW);
+  }
 
 
   // Screen Init
