@@ -20,8 +20,8 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_VERSION "1.4.73"
-#define SOFT_DATE "2019-03-20"
+#define SOFT_VERSION "1.4.74"
+#define SOFT_DATE "2019-09-03"
 #define EVSE_VERSION 11
 
 #define DEBUG 0
@@ -84,6 +84,9 @@ int sleepMode = 0;
 // Screen LCD 
 LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 20 chars and 4 line display
 // Using ports SDCLK / SDA / SCL / VCC +5V / GND
+
+// Relay install on v3.3 / GND / D4
+int relayOutput = D4; // set to 0 if disactive
 
 
 // Json allocation
@@ -505,6 +508,15 @@ void evseWrite(String evseRegister, int value)
 	if (value == EVSE_ACTIVE)
 	{
 		valueToWrite = 0;
+                if (relayOutput)
+                {
+                   // There is a bug in simpleEVSE. If the EVSE is disable and the car
+                   // is plug for more than 15 mins, when we active the EVSE, nothing append.
+                   // So we will cut the link between EVSE and CAR for 2 sec for init.
+                   digitalWrite(relayOutput, HIGH);
+                   delay(2000);
+                   digitalWrite(relayOutput, LOW);
+                }
 	}
 	else if (value == EVSE_DISACTIVE)
         {
@@ -1337,7 +1349,12 @@ void setup()
   Serial.println("");
   Serial.print("Welcome to bicoqueEVSE - "); Serial.println(SOFT_VERSION);
 
-
+  // relay Init
+  if (relayOutput)
+  {
+    pinMode(relayOutput, OUTPUT);
+    digitalWrite(relayOutput, LOW);
+  }
 
 
   // Screen Init
