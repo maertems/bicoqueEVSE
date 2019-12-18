@@ -20,8 +20,9 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_VERSION "1.4.74"
-#define SOFT_DATE "2019-09-03"
+#define SOFT_NAME "bicoqueEvse"
+#define SOFT_VERSION "1.4.75"
+#define SOFT_DATE "2019-12-18"
 #define EVSE_VERSION 11
 
 #define DEBUG 1
@@ -33,8 +34,8 @@ ModbusMaster232 node(1);
 // Wifi AP info for configuration
 const char* wifiApSsid = "bicoqueEVSE";
 const char* wifiApPasswd = "randomPass";
-String wifiSsid;
-String wifiPasswd;
+String wifiSsid   = "";
+String wifiPasswd = "";
 
 
 // Update info
@@ -63,10 +64,10 @@ int evseConnectionProblem = 0;
 #define EVSE_DISACTIVE 1
 
 
-// config
-int wifiEnable;
-int evseAutoStart;
-int alreadyBoot;
+// config default
+int wifiEnable    = 1;
+int evseAutoStart = 1;
+int alreadyBoot   = 0;
 IPAddress ip;
 
 // Button switch
@@ -76,10 +77,10 @@ int buttonPressed = 0; //When a button just pressed, do not continue to thik it'
 
 
 // Module
-int internalMode  = 0; // 0: normal - 1: Not define - 2: menu
-int menuTimerIdle = 0;
+int internalMode   = 0; // 0: normal - 1: Not define - 2: menu
+int menuTimerIdle  = 0;
 int sleepModeTimer = 0;
-int sleepMode = 0;
+int sleepMode      = 0;
 
 // Screen LCD
 LiquidCrystal_I2C lcd(0x27, 20, 4); // set the LCD address to 0x27 for a 20 chars and 4 line display
@@ -90,11 +91,14 @@ int relayOutput = D4; // set to 0 if disactive
 
 
 // Json allocation
+//-- For all http API paramerters
 StaticJsonDocument<200> jsonBuffer;
-String dataJsonConfig;
+
+//- Config file
 DynamicJsonDocument jsonConfig(200);
-//JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
-//JsonObject jsonConfigEvse = jsonConfig.createNestedObject("evse");
+JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
+JsonObject jsonConfigEvse = jsonConfig.createNestedObject("evse");
+String dataJsonConfig;
 
 String dataJsonConsumption;
 DynamicJsonDocument jsonConsumption(200);
@@ -213,7 +217,7 @@ int menuGetFromAction(void)
     }
 
     evseUpdatePower(evsePowerOnLimit, NORMAL_STATE);
-    jsonConfig["evse"]["autostart"] = evseAutoStart;
+    jsonConfigEvse["autostart"] = evseAutoStart;
     configSave();
     // eepromWrite(AUTOSTART, String(evseAutoStart) );
   }
@@ -230,7 +234,7 @@ int menuGetFromAction(void)
       WiFi.disconnect();
     }
 
-    jsonConfig["wifi"]["enable"] = wifiEnable;
+    jsonConfigWifi["enable"] = wifiEnable;
     configSave();
   }
   else if (menuStatus >= 400 && menuStatus < 500)
@@ -851,7 +855,7 @@ void configSave()
 
   if (DEBUG) 
   {
-    String testLau = jsonConfig["wifi"]["password"];
+    String testLau = jsonConfigWifi["password"];
     Serial.print("jsonConfigWifiPassword : ");Serial.println(testLau);
     Serial.print("write config : ");
     Serial.println(dataJsonConfig);
@@ -1174,13 +1178,13 @@ void webWrite()
 
   if (autoStart != "")
   {
-    jsonConfig["evse"]["autostart"] = autoStart;
+    jsonConfigEvse["autostart"] = autoStart;
     configSave();
   }
 
   if ( wifiEnable != "")
   {
-    jsonConfig["wifi"]["enable"] = wifiEnable;
+    jsonConfigWifi["enable"] = wifiEnable;
     configSave();
   }
 
@@ -1279,11 +1283,9 @@ void webInitSetting()
   {
     Serial.print("Debug : qsid : ");Serial.println(qsid);
     Serial.print("Debug : qpass : ");Serial.println(qpass);
-    jsonConfig["wifi"]["ssid"] = qsid;
-    configSave();
-    jsonConfig["wifi"]["password"] = qpass;
-    configSave();
-    jsonConfig["wifi"]["enable"] = 1;
+    jsonConfigWifi["ssid"] = qsid;
+    jsonConfigWifi["password"] = qpass;
+    jsonConfigWifi["enable"] = 1;
     configSave();
 
     content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
@@ -1359,8 +1361,8 @@ String wifiScan(void)
 void wifiReset()
 {
 
-  jsonConfig["wifi"]["ssid"]     = "";
-  jsonConfig["wifi"]["password"] = "";
+  jsonConfigWifi["ssid"]     = "";
+  jsonConfigWifi["password"] = "";
   configSave();
 
   WiFi.mode(WIFI_OFF);
@@ -1495,6 +1497,7 @@ void setup()
   // FileSystem
   if (SPIFFS.begin())
   {
+    boolean configFileToCreate = 0;
     // check if we have et config file
     if (SPIFFS.exists("/config.json"))
     {
@@ -1515,24 +1518,36 @@ void setup()
       evseAutoStart         = jsonConfig["evse"]["autostart"];
       alreadyBoot           = jsonConfig["alreadyBoot"];
       wifiEnable=1; //to remove // lau debug
+
+      // maybe we are resusing an esp
+      if ( strcmp( jsonConfig["softName"], SOFT_NAME ) == 0)
+      {
+        configFileToCreate = 1;
+      }
     }
     else
+    {
+      configFileToCreate = 1;
+    }
+
+    if (configFileToCreate == 1)
     {
       // No config found.
       // Start in AP mode to configure
       // debug create object here
       Serial.println("Config.json not found. Create one");
-      wifiEnable    = 0;
-      alreadyBoot   = 0;
-      wifiSsid      = "";
-      wifiPasswd    = "";
-      evseAutoStart = 0;
+      
+      // clear all existing docs
+      jsonConfig.clear();
+      jsonConfigWifi = jsonConfig.createNestedObject("wifi");
+      jsonConfigEvse = jsonConfig.createNestedObject("evse");
 
-      jsonConfig["wifi"]["enable"]    = wifiEnable;
-      jsonConfig["wifi"]["ssid"]      = wifiSsid;
-      jsonConfig["wifi"]["password"]  = wifiPasswd;
-      jsonConfig["evse"]["autostart"] = evseAutoStart;
-      jsonConfig["alreadyBoot"]       = alreadyBoot;
+      jsonConfigWifi["enable"]    = wifiEnable;
+      jsonConfigWifi["ssid"]      = wifiSsid;
+      jsonConfigWifi["password"]  = wifiPasswd;
+      jsonConfigEvse["autostart"] = evseAutoStart;
+      jsonConfig["alreadyBoot"]   = alreadyBoot;
+      jsonConfig["softName"]      = SOFT_NAME;
 
       configSave();
     }
