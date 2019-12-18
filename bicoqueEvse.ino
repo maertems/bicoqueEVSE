@@ -97,6 +97,49 @@ String dataJsonConsumption;
 DynamicJsonDocument jsonConsumption(200);
 //JsonObject jsonConsumptionDays = jsonConsumption.createNestedObject("days");
 
+/*
+
+{
+"location": {
+"lat": 48.748010,
+"lon": 2.293491
+},
+"feeds": [
+{
+"key": "a1",
+"value": 42
+},
+{
+"key": "a2",
+"value": 43
+}
+]
+}
+
+
+// Allocate JsonDocument
+const int capacity = JSON_ARRAY_SIZE(2) + 4 * JSON_OBJECT_SIZE(2);
+StaticJsonDocument<capacity> doc;
+// Add the "location" object
+JsonObject location = doc.createNestedObject("location");
+location["lat"] = 48.748010;
+location["lon"] = 2.293491;
+// Add the "feeds" array
+JsonArray feeds = doc.createNestedArray("feeds");
+JsonObject feed1 = feeds.createNestedObject();
+feed1["key"] = "a1";
+feed1["value"] = analogRead(A1);
+JsonObject feed2 = feeds.createNestedObject();
+feed2["key"] = "a2";
+feed2["value"] = analogRead(A2);
+
+*/
+
+
+
+
+
+
 
 // screen default page
 int page = 0;
