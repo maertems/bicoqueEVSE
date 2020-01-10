@@ -1538,9 +1538,13 @@ void setup()
       Serial.println("Config.json not found. Create one");
       
       // clear all existing docs
+      Serial.println("Config.json : clear");
       jsonConfig.clear();
+      Serial.println("Config.json : create wifi");
       jsonConfigWifi = jsonConfig.createNestedObject("wifi");
+      Serial.println("Config.json : create evse");
       jsonConfigEvse = jsonConfig.createNestedObject("evse");
+      Serial.println("Config.json : setup values");
 
       jsonConfigWifi["enable"]    = wifiEnable;
       jsonConfigWifi["ssid"]      = wifiSsid;
@@ -1549,6 +1553,7 @@ void setup()
       jsonConfig["alreadyBoot"]   = alreadyBoot;
       jsonConfig["softName"]      = SOFT_NAME;
 
+      Serial.println("Config.json : load save function");
       configSave();
     }
 
