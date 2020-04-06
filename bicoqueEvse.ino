@@ -1510,6 +1510,7 @@ void setup()
         // Getting error when deserialise... I don know what to do here...
       }
 
+      Serial.println("Wifi settings");
       wifiEnable            = jsonConfig["wifi"]["enable"];
       String wifiSsidTemp   = jsonConfig["wifi"]["ssid"];
       String wifiPasswdTemp = jsonConfig["wifi"]["password"];
@@ -1519,9 +1520,22 @@ void setup()
       alreadyBoot           = jsonConfig["alreadyBoot"];
       wifiEnable=1; //to remove // lau debug
 
-      // maybe we are resusing an esp
-      if ( strcmp( jsonConfig["softName"], SOFT_NAME ) == 0)
+      String softName = jsonConfig["softName"];
+      Serial.print("softName : "); Serial.println( softName);
+
+      if (softName.length() > 0 )
       {
+        Serial.print("Str comp. softName : "); Serial.println( softName);
+        // maybe we are resusing an esp
+        if ( strcmp(softName.c_str(), "bicoqueEvse") == 0 ) //SOFT_NAME ) == 0)
+        {
+          Serial.println("Not the same softname");
+          configFileToCreate = 1;
+        }
+      }
+      else
+      {
+        Serial.println("softName not found");
         configFileToCreate = 1;
       }
     }
