@@ -20,16 +20,12 @@ ModbusMaster232 node(1);
 // ModBus is a complet new lib. add sofwareserial to use serial1 Corresponding to RX0(GPIO3) and TX0(GPIO1) in board
 
 // firmware version
-#define SOFT_NAME "bicoqueEvse"
-#define SOFT_VERSION "1.4.75"
-#define SOFT_DATE "2019-12-18"
-#define EVSE_VERSION 11
+#define SOFT_NAME "bicoqueEVSE"
+#define SOFT_VERSION "1.4.76"
+#define SOFT_DATE "2020-04-07"
+#define EVSE_VERSION 15
 
 #define DEBUG 1
-
-// address for EEPROM
-#define ALREADYBOOT 98
-#define ALREADYBOOT_SIZE 1
 
 // Wifi AP info for configuration
 const char* wifiApSsid = "bicoqueEVSE";
@@ -63,8 +59,34 @@ int evseConnectionProblem = 0;
 #define EVSE_ACTIVE 0
 #define EVSE_DISACTIVE 1
 
+// Json allocation
+//-- For all http API paramerters
+StaticJsonDocument<200> jsonBuffer;
+
+String dataJsonConsumption;
+DynamicJsonDocument jsonConsumption(200);
+
 
 // config default
+typedef struct configWifi 
+{
+  String ssid;
+  String password;
+  boolean enable;
+};
+typedef struct configEvse 
+{
+  boolean autoStart;
+};
+typedef struct config
+{
+  configWifi wifi;
+  configEvse evse;
+  boolean alreadyStart;
+  String softName;
+};
+config softConfig;
+
 int wifiEnable    = 1;
 int evseAutoStart = 1;
 int alreadyBoot   = 0;
@@ -86,63 +108,8 @@ int sleepMode      = 0;
 LiquidCrystal_I2C lcd(0x27, 20, 4); // set the LCD address to 0x27 for a 20 chars and 4 line display
 // Using ports SDCLK / SDA / SCL / VCC +5V / GND
 
-// Relay install on v3.3 / GND / D4
-int relayOutput = D4; // set to 0 if disactive
-
-
-// Json allocation
-//-- For all http API paramerters
-StaticJsonDocument<200> jsonBuffer;
-
-//- Config file
-DynamicJsonDocument jsonConfig(200);
-JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
-JsonObject jsonConfigEvse = jsonConfig.createNestedObject("evse");
-String dataJsonConfig;
-
-String dataJsonConsumption;
-DynamicJsonDocument jsonConsumption(200);
-//JsonObject jsonConsumptionDays = jsonConsumption.createNestedObject("days");
-
-/*
-
-{
-"location": {
-"lat": 48.748010,
-"lon": 2.293491
-},
-"feeds": [
-{
-"key": "a1",
-"value": 42
-},
-{
-"key": "a2",
-"value": 43
-}
-]
-}
-
-
-// Allocate JsonDocument
-const int capacity = JSON_ARRAY_SIZE(2) + 4 * JSON_OBJECT_SIZE(2);
-StaticJsonDocument<capacity> doc;
-// Add the "location" object
-JsonObject location = doc.createNestedObject("location");
-location["lat"] = 48.748010;
-location["lon"] = 2.293491;
-// Add the "feeds" array
-JsonArray feeds = doc.createNestedArray("feeds");
-JsonObject feed1 = feeds.createNestedObject();
-feed1["key"] = "a1";
-feed1["value"] = analogRead(A1);
-JsonObject feed2 = feeds.createNestedObject();
-feed2["key"] = "a2";
-feed2["value"] = analogRead(A2);
-
-*/
-
-
+// Relay install on v3.3 / GND / D5
+int relayOutput = D5; // set to 0 if disactive
 
 
 
@@ -217,7 +184,7 @@ int menuGetFromAction(void)
     }
 
     evseUpdatePower(evsePowerOnLimit, NORMAL_STATE);
-    jsonConfigEvse["autostart"] = evseAutoStart;
+    softConfig.evse.autoStart = evseAutoStart;
     configSave();
     // eepromWrite(AUTOSTART, String(evseAutoStart) );
   }
@@ -234,7 +201,7 @@ int menuGetFromAction(void)
       WiFi.disconnect();
     }
 
-    jsonConfigWifi["enable"] = wifiEnable;
+    softConfig.wifi.enable = wifiEnable;
     configSave();
   }
   else if (menuStatus >= 400 && menuStatus < 500)
@@ -695,106 +662,6 @@ int checkButton()
 
 
 // ********************************************
-// EEPROM Functions
-// ********************************************
-String eepromRead(int startAddress, int bytes)
-{
-  String stringRead;
-  for (int i = 0; i < bytes; ++i)
-  {
-    stringRead += char(EEPROM.read(startAddress + i));
-  }
-
-  if (DEBUG)
-  {
-    Serial.print("Debug eeprom: read address : "); Serial.print(startAddress); Serial.print(" - string : "); Serial.println(stringRead);
-  }
-  return stringRead;
-}
-
-int eepromWrite(int startAddress, String stringToWrite)
-{
-  for (int i = 0; i < stringToWrite.length(); ++i)
-  {
-    EEPROM.write(startAddress + i, stringToWrite[i]);
-  }
-  EEPROM.commit();
-
-  if (DEBUG)
-  {
-    Serial.print("Debug eeprom: write address : "); Serial.print(startAddress); Serial.print(" - string : "); Serial.println(stringToWrite);
-  }
-  return 1;
-}
-int eepromClear(int startAddress, int clearSize)
-{
-  for (int i = 0; i < clearSize; ++i)
-  {
-    EEPROM.write(startAddress + i, 0);
-  }
-  EEPROM.commit();
-
-  return 1;
-}
-int eepromReadInt(int address) {
-  int value = 0x0000;
-  value = value | (EEPROM.read(address) << 8);
-  value = value | EEPROM.read(address + 1);
-  return value;
-}
-
-void eepromWriteInt(int address, int value) {
-  EEPROM.write(address, (value >> 8) & 0xFF );
-  EEPROM.write(address + 1, value & 0xFF);
-  EEPROM.commit();
-}
-
-float eepromReadFloat(int address) {
-  union u_tag {
-    byte b[4];
-    float fval;
-  } u;
-  u.b[0] = EEPROM.read(address);
-  u.b[1] = EEPROM.read(address + 1);
-  u.b[2] = EEPROM.read(address + 2);
-  u.b[3] = EEPROM.read(address + 3);
-  return u.fval;
-}
-
-void eepromWriteFloat(int address, float value) {
-  union u_tag {
-    byte b[4];
-    float fval;
-  } u;
-  u.fval = value;
-
-  EEPROM.write(address  , u.b[0]);
-  EEPROM.write(address + 1, u.b[1]);
-  EEPROM.write(address + 2, u.b[2]);
-  EEPROM.write(address + 3, u.b[3]);
-
-  EEPROM.commit();
-}
-
-void eepromReadString(int offset, int bytes, char *buf) {
-  char c = 0;
-  for (int i = offset; i < (offset + bytes); i++) {
-    c = EEPROM.read(i);
-    buf[i - offset] = c;
-    if (c == 0) break;
-  }
-}
-
-void eepromWriteString(int offset, int bytes, char *buf) {
-  char c = 0;
-  for (int i = 0; i < bytes; i++) {
-    c = buf[i];
-    EEPROM.write(offset + i, c);
-  }
-  EEPROM.commit();
-}
-
-// ********************************************
 // SPIFFFS storage Functions
 // ********************************************
 String storageRead(char *fileName)
@@ -810,7 +677,7 @@ String storageRead(char *fileName)
   else
   {
     size_t sizeFile = file.size();
-    if (sizeFile > 200)
+    if (sizeFile > 400)
     {
       Serial.println("Size of file is too clarge");
     }
@@ -848,22 +715,81 @@ void consumptionSave()
   storageWrite("/consumption.json", dataJsonConsumption);
 }
 
-void configSave()
+String configSerialize()
 {
-  dataJsonConfig = "";
+  String dataJsonConfig;
+  DynamicJsonDocument jsonConfig(800);
+  JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
+  JsonObject jsonConfigEvse = jsonConfig.createNestedObject("evse");
+  
+  jsonConfig["alreadyStart"]  = softConfig.alreadyStart;
+  jsonConfig["softName"]      = softConfig.softName;
+  jsonConfigWifi["ssid"]      = softConfig.wifi.ssid;
+  jsonConfigWifi["password"]  = softConfig.wifi.password;
+  jsonConfigWifi["enable"]    = softConfig.wifi.enable;
+  jsonConfigEvse["autoStart"] = softConfig.evse.autoStart;
+ 
   serializeJson(jsonConfig, dataJsonConfig);
 
-  if (DEBUG) 
-  {
-    String testLau = jsonConfigWifi["password"];
-    Serial.print("jsonConfigWifiPassword : ");Serial.println(testLau);
-    Serial.print("write config : ");
-    Serial.println(dataJsonConfig);
-  }
-
-  storageWrite("/config.json", dataJsonConfig);
+  return dataJsonConfig;
 }
 
+
+bool configSave()
+{
+  String dataJsonConfig = configSerialize();
+  bool fnret = storageWrite("/config.json", dataJsonConfig);
+  
+  if (DEBUG) 
+  {
+    Serial.print("write config : ");
+    Serial.println(dataJsonConfig);
+    Serial.print("Return of write : "); Serial.println(fnret);
+  }
+
+  return fnret;
+}
+
+bool configRead(config &ConfigTemp, char *fileName )
+{
+  String dataJsonConfig;
+  DynamicJsonDocument jsonConfig(800);
+  
+  dataJsonConfig = storageRead("/config.json");
+  
+  DeserializationError jsonError = deserializeJson(jsonConfig, dataJsonConfig);
+  if (jsonError)
+  {
+    Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(jsonError.c_str());
+    return false;
+    // Getting error when deserialise... I don know what to do here...
+  }
+
+  ConfigTemp.alreadyStart   = jsonConfig["alreadyStart"];
+  ConfigTemp.softName       = jsonConfig["softName"].as<String>();
+  ConfigTemp.wifi.ssid      = jsonConfig["wifi"]["ssid"].as<String>();
+  ConfigTemp.wifi.password  = jsonConfig["wifi"]["password"].as<String>();
+  ConfigTemp.wifi.enable    = jsonConfig["wifi"]["enable"];
+  ConfigTemp.evse.autoStart = jsonConfig["evse"]["autoStart"];
+
+  return true;
+  
+}
+
+void configDump(config ConfigTemp)
+{
+  Serial.println("wifi data :");
+  Serial.print("  - ssid : "); Serial.println(ConfigTemp.wifi.ssid);
+  Serial.print("  - password : "); Serial.println(ConfigTemp.wifi.password);
+  Serial.print("  - enable : "); Serial.println(ConfigTemp.wifi.enable);
+  Serial.println("evse data :");
+  Serial.print("  - autostart : "); Serial.println(ConfigTemp.evse.autoStart);
+  Serial.println("General data :");
+  Serial.print("  - alreadyStart : "); Serial.println(ConfigTemp.alreadyStart);
+  Serial.print("  - softName : "); Serial.println(ConfigTemp.softName);
+}
 
 
 
@@ -1128,7 +1054,7 @@ void webApiPower()
 
 void webApiConfig()
 {
-
+  String dataJsonConfig = configSerialize();
   server.send(200, "application/json", dataJsonConfig);
 
 }
@@ -1178,19 +1104,22 @@ void webWrite()
 
   if (autoStart != "")
   {
-    jsonConfigEvse["autostart"] = autoStart;
+    softConfig.evse.autoStart = false;
+    if (autoStart == "1") { softConfig.evse.autoStart = true; }
     configSave();
   }
 
   if ( wifiEnable != "")
   {
-    jsonConfigWifi["enable"] = wifiEnable;
+    softConfig.wifi.enable = false;
+    if ( wifiEnable == "1") { softConfig.wifi.enable = true; }
     configSave();
   }
 
   if ( alreadyBoot != "")
   {
-    jsonConfig["alreadyBoot"] = alreadyBoot;
+    softConfig.alreadyStart = false;
+    if ( alreadyBoot == "1") { softConfig.alreadyStart = true; }
     configSave();
   }
 
@@ -1242,16 +1171,6 @@ void webWrite()
     message += "clear all stats. removed";
   }
 
-  if (eepromWrite != "")
-  {
-    eepromWriteInt(eepromWrite.toInt(), 12345);
-    message += "write : 12345 to eepaom "; message += eepromWrite ; message += "\n";
-  }
-  if (eepromRead != "")
-  {
-    int result = eepromReadInt(eepromRead.toInt());
-    message += "read memory : "; message += eepromRead ; message += " - result : "; message += result ; message += "\n";
-  }
 
   Serial.println("Write done");
   message += "Write done...\n";
@@ -1283,9 +1202,9 @@ void webInitSetting()
   {
     Serial.print("Debug : qsid : ");Serial.println(qsid);
     Serial.print("Debug : qpass : ");Serial.println(qpass);
-    jsonConfigWifi["ssid"] = qsid;
-    jsonConfigWifi["password"] = qpass;
-    jsonConfigWifi["enable"] = 1;
+    softConfig.wifi.ssid     = qsid;
+    softConfig.wifi.password = qpass;
+    softConfig.wifi.enable   = 1;
     configSave();
 
     content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
@@ -1361,8 +1280,8 @@ String wifiScan(void)
 void wifiReset()
 {
 
-  jsonConfigWifi["ssid"]     = "";
-  jsonConfigWifi["password"] = "";
+  softConfig.wifi.ssid     = "";
+  softConfig.wifi.password = "";
   configSave();
 
   WiFi.mode(WIFI_OFF);
@@ -1433,7 +1352,7 @@ String urlencode(String str)
 
 void logger(String message)
 {
-  if (wifiEnable)
+  if (softConfig.wifi.enable)
   {
     HTTPClient httpClient;
     String urlTemp = BASE_URL;
@@ -1502,41 +1421,17 @@ void setup()
     if (SPIFFS.exists("/config.json"))
     {
       Serial.println("Config.json found. read data");
-      dataJsonConfig = storageRead("/config.json");
-      Serial.println(dataJsonConfig);
-      DeserializationError jsonError = deserializeJson(jsonConfig, dataJsonConfig);
-      if (jsonError)
-      {
-        // Getting error when deserialise... I don know what to do here...
-      }
+      configRead(softConfig, "/config.json" );
 
-      Serial.println("Wifi settings");
-      wifiEnable            = jsonConfig["wifi"]["enable"];
-      String wifiSsidTemp   = jsonConfig["wifi"]["ssid"];
-      String wifiPasswdTemp = jsonConfig["wifi"]["password"];
-      wifiSsid              = wifiSsidTemp;
-      wifiPasswd            = wifiPasswdTemp;
-      evseAutoStart         = jsonConfig["evse"]["autostart"];
-      alreadyBoot           = jsonConfig["alreadyBoot"];
-      wifiEnable=1; //to remove // lau debug
-
-      String softName = jsonConfig["softName"];
-      Serial.print("softName : "); Serial.println( softName);
-
-      if (softName.length() > 0 )
+      if (softConfig.softName != SOFT_NAME)
       {
-        Serial.print("Str comp. softName : "); Serial.println( softName);
-        // maybe we are resusing an esp
-        if ( strcmp(softName.c_str(), "bicoqueEvse") == 0 ) //SOFT_NAME ) == 0)
-        {
-          Serial.println("Not the same softname");
-          configFileToCreate = 1;
-        }
-      }
-      else
-      {
-        Serial.println("softName not found");
-        configFileToCreate = 1;
+        Serial.println("Not the same softname");
+        Serial.print("Name from configFile : "); Serial.println(softConfig.softName);
+        Serial.print("Name from code       : "); Serial.println(SOFT_NAME);
+        //configFileToCreate = 1;
+        
+        softConfig.softName       = SOFT_NAME;
+        configSave();
       }
     }
     else
@@ -1551,21 +1446,12 @@ void setup()
       // debug create object here
       Serial.println("Config.json not found. Create one");
       
-      // clear all existing docs
-      Serial.println("Config.json : clear");
-      jsonConfig.clear();
-      Serial.println("Config.json : create wifi");
-      jsonConfigWifi = jsonConfig.createNestedObject("wifi");
-      Serial.println("Config.json : create evse");
-      jsonConfigEvse = jsonConfig.createNestedObject("evse");
-      Serial.println("Config.json : setup values");
-
-      jsonConfigWifi["enable"]    = wifiEnable;
-      jsonConfigWifi["ssid"]      = wifiSsid;
-      jsonConfigWifi["password"]  = wifiPasswd;
-      jsonConfigEvse["autostart"] = evseAutoStart;
-      jsonConfig["alreadyBoot"]   = alreadyBoot;
-      jsonConfig["softName"]      = SOFT_NAME;
+      softConfig.wifi.enable    = wifiEnable;
+      softConfig.wifi.ssid      = wifiSsid;
+      softConfig.wifi.password  = wifiPasswd;
+      softConfig.evse.autoStart = evseAutoStart;
+      softConfig.alreadyStart   = alreadyBoot;
+      softConfig.softName       = SOFT_NAME;
 
       Serial.println("Config.json : load save function");
       configSave();
@@ -1598,17 +1484,13 @@ void setup()
 
   if (DEBUG)
   {
-    Serial.println("Config info :");
-    Serial.print("wifiEnable : "); Serial.println(wifiEnable);
-    Serial.print("wifiSsid : '"); Serial.print(wifiSsid); Serial.println("'");
- //   Serial.print("  sizeof : "); Serial.println(wifiSsid.length);
-    Serial.print("alreadyBoot : "); Serial.println(alreadyBoot);
-    Serial.print("autoStart : "); Serial.println(evseAutoStart);
+    configDump(softConfig);
   }
 
-  if (alreadyBoot == 0 && wifiEnable == 0)
+
+  if (softConfig.alreadyStart == 0 && softConfig.wifi.enable == 0)
   {
-    wifiEnable = 1;
+    softConfig.wifi.enable = 1;
   }
 
 
@@ -1617,18 +1499,18 @@ void setup()
 
   int wifiMode = 0;
   String wifiList;
-  if (wifiEnable)
+  if (softConfig.wifi.enable)
   {
     Serial.println("Enter wifi config");
     lcd.setCursor(1, 1);
     lcd.print("wifi settings");
 
-    if (wifiSsid.length() > 0 and 1 == 0)
+    if (softConfig.wifi.ssid.length() > 0)
     {
       lcd.setCursor(1, 2);
       lcd.print("   connecting...");
       Serial.print("Wifi: Connecting to -");
-      Serial.print(wifiSsid); Serial.println("-");
+      Serial.print(softConfig.wifi.ssid); Serial.println("-");
 
       // Connecting to wifi
       WiFi.mode(WIFI_AP);
@@ -1636,8 +1518,8 @@ void setup()
       WiFi.mode(WIFI_STA);
       WiFi.hostname(wifiApSsid);
 
-      const char * login = wifiSsid.c_str();
-      const char * pass  = wifiPasswd.c_str();
+      const char * login = softConfig.wifi.ssid.c_str();
+      const char * pass  = softConfig.wifi.password.c_str();
       bool wifiConnected = wifiConnect(login, pass);
 
       if (wifiConnected)
@@ -1650,7 +1532,7 @@ void setup()
       else
       {
         Serial.println("Can't connect to Wifi. disactive webserver");
-        wifiEnable = 0;
+        softConfig.wifi.enable = 0;
       }
     }
     else
@@ -1680,7 +1562,7 @@ void setup()
 
   Serial.println("End of wifi config");
 
-  if (wifiEnable)
+  if (softConfig.wifi.enable)
   {
     // Start the server
     lcd.setCursor(1, 1);
@@ -1768,9 +1650,9 @@ void setup()
   // Screen
   screenDefault(page);
 
-  if (alreadyBoot == 0)
+  if (softConfig.alreadyStart == 0)
   {
-    jsonConfig["alreadyBoot"] = 1;
+    softConfig.alreadyStart = 1;
     configSave();
     // eepromWrite(ALREADYBOOT, "1");
   }
@@ -1786,9 +1668,6 @@ void setup()
       String messageToLog = "size:"; messageToLog += f.size();
       logger(messageToLog);
     }
-
-    logger("Config : ");
-    logger(dataJsonConfig);
   }
 
 }
@@ -1948,7 +1827,7 @@ void loop()
   }
 
   // check web client connections
-  if (wifiEnable)
+  if (softConfig.wifi.enable)
   {
     server.handleClient();
   }
