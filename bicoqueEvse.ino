@@ -21,18 +21,17 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.4.76"
-#define SOFT_DATE "2020-04-07"
+#define SOFT_VERSION "1.4.77"
+#define SOFT_DATE "2020-05-14"
 #define EVSE_VERSION 15
 
 #define DEBUG 1
 
 // Wifi AP info for configuration
 const char* wifiApSsid = "bicoqueEVSE";
-const char* wifiApPasswd = "randomPass";
-String wifiSsid   = "";
-String wifiPasswd = "";
-
+bool networkEnable      = 1;
+bool internetConnection = 0;
+int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
 
 // Update info
 #define BASE_URL "http://mangue.net/ota/esp/bicoqueEvse/"
@@ -1220,14 +1219,23 @@ void webInitSetting()
 }
 
 
+
+
+
+
+
+
+
+// ------------------------------
 // Wifi
-bool wifiConnect(const char* ssid, const char* password)
+// ------------------------------
+bool wifiConnectSsid(const char* ssid, const char* password)
 {
   Serial.println(ssid);
   WiFi.begin(ssid, password);
   int c = 0;
   Serial.println("Waiting for Wifi to connect");
-  while ( c < 20 ) {
+  while ( c < 80 ) {
     if (WiFi.status() == WL_CONNECTED) {
       return true;
     }
@@ -1279,7 +1287,6 @@ String wifiScan(void)
 }
 void wifiReset()
 {
-
   softConfig.wifi.ssid     = "";
   softConfig.wifi.password = "";
   configSave();
@@ -1292,24 +1299,135 @@ int wifiPower()
   int dBm = WiFi.RSSI();
   int quality;
   // dBm to Quality:
-  if (dBm <= -100)
-  {
-    quality = 0;
-  }
-  else if (dBm >= -50)
-  {
-    quality = 100;
-  }
-  else
-  {
-    quality = 2 * (dBm + 100);
-  }
+  if (dBm <= -100)     { quality = 0; }
+  else if (dBm >= -50) { quality = 100; }
+  else                 { quality = 2 * (dBm + 100); }
 
   return quality;
 }
 
+void wifiDisconnect()
+{
+  WiFi.mode( WIFI_OFF );
+}
+
+bool wifiConnect(String ssid, String password)
+{
+    if ( DEBUG ) { Serial.println("Enter wifi config"); }
+    lcd.setCursor(1, 1);
+    lcd.print("wifi settings");
+
+    lcd.setCursor(1, 2);
+    lcd.print("   connecting...");
+    if (DEBUG) { Serial.print("Wifi: Connecting to '"); Serial.print(ssid); Serial.println("'"); }
+
+    // Unconnect from AP
+    WiFi.mode(WIFI_AP);
+    WiFi.disconnect();
+
+    // Connecting to SSID
+    WiFi.mode(WIFI_STA);
+    WiFi.hostname(SOFT_NAME);
+
+    bool wifiConnected = wifiConnectSsid(ssid.c_str(), password.c_str());
+
+    if (wifiConnected)
+    {
+      if (DEBUG) { Serial.println("WiFi connected"); }
+      internetConnection = 1;
+
+      lcd.print(" .. ok");
+
+      ip = WiFi.localIP();
+
+      return true;
+    }
+    else
+    {
+        lcd.print("  ko");
+    }
+
+    // If SSID connection failed. Go into AP mode
+    lcd.setCursor(1, 2);
+    lcd.print("   standalone mode");
+
+    // Disconnecting from Standard Mode
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+
+    // Connect to AP mode
+    WiFi.mode(WIFI_AP);
+    WiFi.hostname(SOFT_NAME);
+
+    if (DEBUG) { Serial.println("Wifi config not present. set AP mode"); }
+    WiFi.softAP(wifiApSsid);
+    if (DEBUG) {Serial.println("softap"); }
+
+    ip = WiFi.softAPIP();
+
+    return false;
+}
 
 
+
+// --------------------------------
+// Update
+// --------------------------------
+void updateCheck(bool displayScreen)
+{
+    if (displayScreen)
+    {
+      lcd.setCursor(1, 1);
+      lcd.print("check update       ");
+      delay(1000);
+    }
+  
+    // save power
+    lcd.noBacklight();
+
+    String updateUrl = UPDATE_URL;
+    Serial.println("Check for new update at : "); Serial.println(updateUrl);
+    ESPhttpUpdate.rebootOnUpdate(1);
+    t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, SOFT_VERSION);
+    //t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, ESP.getSketchMD5() );
+
+    Serial.print("return : "); Serial.println(ret);
+    switch (ret) {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        break;
+
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("HTTP_UPDATE_NO_UPDATES");
+        break;
+
+      case HTTP_UPDATE_OK:
+        Serial.println("HTTP_UPDATE_OK");
+        break;
+
+      default:
+        Serial.print("Undefined HTTP_UPDATE Code: "); Serial.println(ret);
+    }
+
+    if (displayScreen)
+    {
+      lcd.setCursor(1, 1);
+      lcd.print("update done  ");
+    }
+    lcd.backlight();
+
+}
+
+
+
+
+
+
+
+
+// -------------------------------
+// Logger function
+// -------------------------------
 String urlencode(String str)
 {
   String encodedString = "";
@@ -1447,8 +1565,8 @@ void setup()
       Serial.println("Config.json not found. Create one");
       
       softConfig.wifi.enable    = wifiEnable;
-      softConfig.wifi.ssid      = wifiSsid;
-      softConfig.wifi.password  = wifiPasswd;
+      softConfig.wifi.ssid      = "";
+      softConfig.wifi.password  = "";
       softConfig.evse.autoStart = evseAutoStart;
       softConfig.alreadyStart   = alreadyBoot;
       softConfig.softName       = SOFT_NAME;
@@ -1497,140 +1615,62 @@ void setup()
   // Define Pins for button
   pinMode(inPin, INPUT_PULLUP);
 
-  int wifiMode = 0;
-  String wifiList;
+
+  internetConnection = wifiConnect(softConfig.wifi.ssid, softConfig.wifi.password);
+
   if (softConfig.wifi.enable)
   {
-    Serial.println("Enter wifi config");
-    lcd.setCursor(1, 1);
-    lcd.print("wifi settings");
-
-    if (softConfig.wifi.ssid.length() > 0)
-    {
-      lcd.setCursor(1, 2);
-      lcd.print("   connecting...");
-      Serial.print("Wifi: Connecting to -");
-      Serial.print(softConfig.wifi.ssid); Serial.println("-");
-
-      // Connecting to wifi
-      WiFi.mode(WIFI_AP);
-      WiFi.disconnect();
-      WiFi.mode(WIFI_STA);
-      WiFi.hostname(wifiApSsid);
-
-      const char * login = softConfig.wifi.ssid.c_str();
-      const char * pass  = softConfig.wifi.password.c_str();
-      bool wifiConnected = wifiConnect(login, pass);
-
-      if (wifiConnected)
-      {
-        Serial.println("WiFi connected");
-        wifiMode = 1;
-
-        lcd.print(" .. ok");
-      }
-      else
-      {
-        Serial.println("Can't connect to Wifi. disactive webserver");
-        softConfig.wifi.enable = 0;
-      }
-    }
-    else
-    {
-      lcd.setCursor(1, 2);
-      lcd.print("   standalone mode");
-      WiFi.mode(WIFI_STA);
-      WiFi.disconnect();
-      WiFi.mode(WIFI_AP);
-      WiFi.hostname(wifiApSsid);
-      Serial.println("Wifi config not present. set AP mode");
-      WiFi.softAP(wifiApSsid, wifiApPasswd, 6);
-      Serial.println("softap");
-      wifiMode = 2;
-
-      lcd.print("  ko");
-    }
+    wifiActivationTempo = 0;
   }
   else
   {
-    Serial.println("Wifi desactivated");
-    WiFi.mode(WIFI_OFF);
-
-    lcd.print(" ..off");
-    delay(2000);
+    if (DEBUG) { Serial.println("Deactive wifi in 5 mins."); }
+    wifiActivationTempo = 600;
   }
 
   Serial.println("End of wifi config");
 
-  if (softConfig.wifi.enable)
+  int wifiMode = 0;
+
+  // Start the server
+  lcd.setCursor(1, 1);
+  lcd.print("load webserver");
+  lcd.setCursor(1, 2);
+  lcd.print("                 ");
+
+  server.on("/", webRoot);
+  server.on("/reload", webReload);
+  server.on("/write", webWrite);
+  server.on("/debug", webDebug);
+  server.on("/reboot", webReboot);
+  server.on("/jsonInfo", webJsonInfo);
+  server.on("/api/status", webApiStatus);
+  server.on("/api/power", webApiPower);
+  server.on("/api/config", webApiConfig);
+
+  server.on("/wifi", webInitRoot);
+  server.on("/setting", webInitSetting);
+
+  server.onNotFound(webNotFound);
+  server.begin();
+
+  if (DEBUG)
   {
-    // Start the server
-    lcd.setCursor(1, 1);
-    lcd.print("load webserver");
-    lcd.setCursor(1, 2);
-    lcd.print("                 ");
-
-    if (wifiMode == 1) // normal mode
-    {
-      server.on("/", webRoot);
-      server.on("/reload", webReload);
-      server.on("/write", webWrite);
-      server.on("/debug", webDebug);
-      server.on("/reboot", webReboot);
-      server.on("/jsonInfo", webJsonInfo);
-      server.on("/api/status", webApiStatus);
-      server.on("/api/power", webApiPower);
-      server.on("/api/config", webApiConfig);
-
-      server.on("/setting", webInitSetting);
-      ip = WiFi.localIP();
-    }
-    else if (wifiMode == 2) // AP mode for config
-    {
-      server.on("/", webInitRoot);
-      server.on("/setting", webInitSetting);
-      ip = WiFi.softAPIP();
-    }
-    server.onNotFound(webNotFound);
-    server.begin();
-
     Serial.print("Http: Server started at http://");
     Serial.print(ip);
     Serial.println("/");
     Serial.print("Status : ");
     Serial.println(WiFi.RSSI());
+  }
 
-    lcd.setCursor(1, 1);
-    lcd.print("check update       ");
-    delay(1000);
-    lcd.noBacklight();
 
-    String updateUrl = UPDATE_URL;
-    Serial.println("Check for new update at : "); Serial.println(updateUrl);
-    ESPhttpUpdate.rebootOnUpdate(1);
-    t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, SOFT_VERSION);
-    //t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, ESP.getSketchMD5() );
+  if (internetConnection)
+  {
+    // check update
+    updateCheck(1);
 
-    Serial.print("return : "); Serial.println(ret);
-    switch (ret) {
-      case HTTP_UPDATE_FAILED:
-        Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
-        break;
-
-      case HTTP_UPDATE_NO_UPDATES:
-        Serial.println("HTTP_UPDATE_NO_UPDATES");
-        break;
-
-      case HTTP_UPDATE_OK:
-        Serial.println("HTTP_UPDATE_OK");
-        break;
-
-      default:
-        Serial.print("Undefined HTTP_UPDATE Code: "); Serial.println(ret);
-    }
-    lcd.backlight();
-    lcd.setCursor(1, 1);
-    lcd.print("update done  ");
+    // get time();
+    //timeClient.begin();
 
     // get time();
     getTimeOnStartup();
@@ -1641,6 +1681,7 @@ void setup()
 
   lcd.setCursor(1, 1);
   lcd.print("init EVSE     ");
+
   // Read EVSE info
   evseWrite("minAmpsValue", 0);
   evseWrite("modbus", 1);
@@ -1827,8 +1868,9 @@ void loop()
   }
 
   // check web client connections
-  if (softConfig.wifi.enable)
+  if (networkEnable)
   {
+    // check web client connections
     server.handleClient();
   }
 
