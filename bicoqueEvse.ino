@@ -14,6 +14,11 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 
+// NTP
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+
+
 
 // Instantiate ModbusMaster object as slave ID 1
 ModbusMaster232 node(1);
@@ -21,9 +26,9 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.4.77"
-#define SOFT_DATE "2020-05-14"
-#define EVSE_VERSION 15
+#define SOFT_VERSION "1.4.96"
+#define SOFT_DATE "2020-08-20"
+#define EVSE_VERSION 10
 
 #define DEBUG 1
 
@@ -34,11 +39,12 @@ bool internetConnection = 0;
 int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
 
 // Update info
-#define BASE_URL "http://mangue.net/ota/esp/bicoqueEvse/"
-#define UPDATE_URL "http://mangue.net/ota/esp/bicoqueEvse/update.php"
+#define BASE_URL "http://esp.mangue.net/ota/esp/bicoqueEvse/"
+#define UPDATE_URL "http://esp.mangue.net/ota/esp/bicoqueEvse/update.php"
 
 // Web server info
 ESP8266WebServer server(80);
+IPAddress ip;
 
 
 // EVSE info
@@ -53,8 +59,6 @@ int evseStatus        = 0;
 int evseEnable        = 0;
 int evseStatusCounter = 0;
 int evseConnectionProblem = 0;
-#define NORMAL_STATE 0
-#define FORCE_CURRENT 1
 #define EVSE_ACTIVE 0
 #define EVSE_DISACTIVE 1
 
@@ -64,6 +68,19 @@ StaticJsonDocument<200> jsonBuffer;
 
 String dataJsonConsumption;
 DynamicJsonDocument jsonConsumption(200);
+
+// For timers
+int timerPerHourLast     = 0;
+
+
+// NTP Constant
+#define NTP_SERVER "ntp.ovh.net"
+#define NTP_TIME_ZONE 2         // GMT +2:00
+
+// params WifiUDP object / ntp server / timeZone in sec / request ntp every xx milisec
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, NTP_SERVER , (NTP_TIME_ZONE * 3600) , 86400000);
+
 
 
 // config default
@@ -86,10 +103,6 @@ typedef struct config
 };
 config softConfig;
 
-int wifiEnable    = 1;
-int evseAutoStart = 1;
-int alreadyBoot   = 0;
-IPAddress ip;
 
 // Button switch
 int inPin = 12; // D6
@@ -104,8 +117,8 @@ int sleepModeTimer = 0;
 int sleepMode      = 0;
 
 // Screen LCD
-LiquidCrystal_I2C lcd(0x27, 20, 4); // set the LCD address to 0x27 for a 20 chars and 4 line display
 // Using ports SDCLK / SDA / SCL / VCC +5V / GND
+LiquidCrystal_I2C lcd(0x27, 20, 4); // set the LCD address to 0x27 for a 20 chars and 4 line display
 
 // Relay install on v3.3 / GND / D5
 int relayOutput = D5; // set to 0 if disactive
@@ -149,8 +162,70 @@ int statsLastWrite         = 0;
 int consumptionLastCharge  = 0;
 int consumptionLastChargeRunning = 0;
 
-// Time
-long timeAtStarting = 0; // need to get from ntp server timestamp when ESP start
+
+
+
+void wifiReset()
+{
+  softConfig.wifi.ssid     = "";
+  softConfig.wifi.password = "";
+  configSave();
+
+  WiFi.mode(WIFI_OFF);
+  WiFi.disconnect();
+}
+
+String wifiScan(void)
+{
+  String st;
+  int n = WiFi.scanNetworks();
+  Serial.println("scan done");
+  if (n == 0)
+    Serial.println("no networks found");
+  else
+  {
+    Serial.print(n);
+    Serial.println(" networks found");
+    st = "<ol>";
+    for (int i = 0; i < n; ++i)
+    {
+      // Print SSID and RSSI for each network found
+      st += "<li>";
+      st += WiFi.SSID(i);
+      st += " (";
+      st += WiFi.RSSI(i);
+      st += ")";
+      st += (WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*";
+      st += "</li>";
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print(WiFi.SSID(i));
+      Serial.print(" (");
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(")");
+      Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*");
+      delay(10);
+    }
+    st += "</ol>";
+  }
+  Serial.println("");
+  delay(100);
+
+  return st;
+}
+
+int wifiPower()
+{
+  int dBm = WiFi.RSSI();
+  int quality;
+  // dBm to Quality:
+  if (dBm <= -100)     { quality = 0; }
+  else if (dBm >= -50) { quality = 100; }
+  else                 { quality = 2 * (dBm + 100); }
+
+  return quality;
+}
+
 
 
 // ********************************************
@@ -168,39 +243,36 @@ int menuGetFromAction(void)
     String tempValue = menuValue;
 
     //-- write data
-    evseUpdatePower(tempValue.toInt(), NORMAL_STATE);
+    evseUpdatePower(tempValue.toInt());
   }
   else if (menuStatus >= 200 && menuStatus < 300) // AUTOSTART
   {
     menuStatus = 2;
     if ( strcmp(menuValue, enum201[1]) == 0)
     {
-      evseAutoStart = 1;
+      softConfig.evse.autoStart = 1;
     }
     else if (strcmp(menuValue, enum201[2]) == 0)
     {
-      evseAutoStart = 0;
+      softConfig.evse.autoStart = 0;
     }
 
-    evseUpdatePower(evsePowerOnLimit, NORMAL_STATE);
-    softConfig.evse.autoStart = evseAutoStart;
+    evseUpdatePower(evsePowerOnLimit);
     configSave();
-    // eepromWrite(AUTOSTART, String(evseAutoStart) );
   }
   else if (menuStatus >= 300 && menuStatus < 400)
   {
     menuStatus = 11;
     if ( strcmp(menuValue, enum301[1]) == 0) {
-      wifiEnable = 1;
+      softConfig.wifi.enable = 1;
     }
     else if ( strcmp(menuValue, enum301[2]) == 0)
     {
-      wifiEnable = 0;
+      softConfig.wifi.enable = 0;
       WiFi.mode(WIFI_OFF);
       WiFi.disconnect();
     }
 
-    softConfig.wifi.enable = wifiEnable;
     configSave();
   }
   else if (menuStatus >= 400 && menuStatus < 500)
@@ -224,7 +296,7 @@ int menuGetFromAction(void)
       case 1: if (evsePowerOnLimit < 5) {
           evsePowerOnLimit = 5;
         }; menuStatus = 101 + evsePowerOnLimit - 5 ; break;
-      case 2: if (evseAutoStart) {
+      case 2: if (softConfig.evse.autoStart) {
           menuStatus = 201;
         } else {
           menuStatus = 202;
@@ -236,7 +308,7 @@ int menuGetFromAction(void)
 
       case 11:
         // get actual value and set the good menu
-        if (wifiEnable) {
+        if (softConfig.wifi.enable) {
           menuStatus = 301;
         } else {
           menuStatus = 302;
@@ -525,17 +597,14 @@ void evseEnableCheck()
     evseEnable = 255;
   }
 }
-void evseUpdatePower(int power, int currentOnly)
+void evseUpdatePower(int power)
 {
 
   evseWrite("currentLimit", power);
   evseCurrentLimit = power;
   
-  if (currentOnly == 0)
-  {
-    evseWrite("powerOn", power);
-    evsePowerOnLimit = power;
-  }
+  evseWrite("powerOn", power);
+  evsePowerOnLimit = power;
 }
 void evseWrite(String evseRegister, int value)
 {
@@ -573,9 +642,15 @@ void evseWrite(String evseRegister, int value)
                    // There is a bug in simpleEVSE. If the EVSE is disable and the car
                    // is plug for more than 15 mins, when we active the EVSE, nothing append.
                    // So we will cut the link between EVSE and CAR for 2 sec for init.
-                   digitalWrite(relayOutput, HIGH);
-                   delay(2000);
-                   digitalWrite(relayOutput, LOW);
+
+		   evseStatusCheck();
+                   if (evseStatus < 3) // check that car is not charging
+                   {
+                     digitalWrite(relayOutput, HIGH);
+                     delay(1000);
+                     digitalWrite(relayOutput, LOW);
+                     delay(1000);
+                   }
                 }
 	}
 	else if (value == EVSE_DISACTIVE)
@@ -792,37 +867,6 @@ void configDump(config ConfigTemp)
 
 
 
-// ********************************************
-// Time and Stats Functions
-// ********************************************
-long getTime()
-{
-  // get mili from begining
-  long timeInSec = timeAtStarting + millis() / 1000; // work in sec instead of milisec
-
-  return timeInSec;
-}
-
-long getTimeOnStartup()
-{
-  // send NTP request. or get a webpage with a timestamp
-
-  HTTPClient httpClient;
-  httpClient.begin("http://mangue.net/ota/esp/bicoqueEvse/timestamp.php");
-  int httpAnswerCode = httpClient.GET();
-  String timestamp;
-  if (httpAnswerCode > 0)
-  {
-    timestamp = httpClient.getString();
-  }
-  httpClient.end();
-
-  // global variable
-  timeAtStarting = timestamp.toInt() - (millis() / 1000);
-
-}
-
-
 
 
 // ********************************************
@@ -852,9 +896,9 @@ void screenDefault(int page)
       break;
     case 2:
       statusLine1 = "  Vehicule present";
-      if (evseAutoStart == 1)
+      if (softConfig.evse.autoStart == 1)
       {
-        statusLine2 = "                   "; statusLine3 = "attente voiture";
+        statusLine2 = "                   "; statusLine3 = "     attente prog EV";
       }
       else
       {
@@ -883,7 +927,7 @@ void screenDefault(int page)
     case 1:
       lcd.setCursor(0, 0); lcd.print("Wifi Power : "); lcd.print(WiFi.RSSI());
       lcd.setCursor(0, 1); lcd.print("IP: "); lcd.print(ip);
-      lcd.setCursor(0, 2); lcd.print("Amps : "); lcd.print(evsePowerOnLimit); lcd.print("A / "); lcd.print(evseCurrentLimit); lcd.print("A");
+      lcd.setCursor(0, 2); lcd.print("Amps : "); lcd.print(evseCurrentLimit); lcd.print("A");
       lcd.setCursor(0, 3); lcd.print("Conso: "); lcd.print(int(consumptionTotal / 1000)); lcd.print("kWh");
       break;
     case 2:
@@ -955,6 +999,7 @@ void webJsonInfo()
   String message = "{\n  \"version\": \""; message += SOFT_VERSION; message += "\",\n";
   //message += "  \"\": \""; message += ; message += "\",\n";
 
+  message += "  \"powerHardwareLimit\": \""; message += evseHardwareLimit; message += "\",\n";
   message += "  \"powerOn\": \""; message += evsePowerOnLimit; message += "\",\n";
   message += "  \"currentLimit\": \""; message += evseCurrentLimit; message += "\",\n";
   message += "  \"consumptionLastCharge\": \""; message += consumptionLastCharge ; message += "\",\n";
@@ -965,7 +1010,7 @@ void webJsonInfo()
   message += "  \"wifiSignal\": \""; message += WiFi.RSSI(); message += "\",\n";
   message += "  \"wifiPower\": \""; message += wifiPower() ; message += "\",\n";
   message += "  \"uptime\": \""; message += timestamp ; message += "\",\n";
-  message += "  \"time\": \""; message += timestamp + timeAtStarting ; message += "\",\n";
+  message += "  \"time\": \""; message += timeClient.getEpochTime() ; message += "\",\n";
   message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\",\n";
   message += "  \"enable\": \""; message += evseEnable ; message += "\",\n";
 
@@ -1042,7 +1087,7 @@ void webApiPower()
     else
     {
       int actionValue = jsonBuffer["action"];
-      evseUpdatePower(actionValue, NORMAL_STATE);
+      evseUpdatePower(actionValue);
       message += "  \"action\": \""; message += actionValue ; message += "\"\n}\n";
     }
   }
@@ -1055,7 +1100,6 @@ void webApiConfig()
 {
   String dataJsonConfig = configSerialize();
   server.send(200, "application/json", dataJsonConfig);
-
 }
 
 
@@ -1131,8 +1175,7 @@ void webWrite()
     message += tempAmp;
     message += "\n";
     message += "Update Power in normal state\n";
-    evseUpdatePower(tempAmp, NORMAL_STATE);
-    //evseWrite("powerOn", amp.toInt());
+    evseUpdatePower(tempAmp);
   }
 
   if (modbus != "")
@@ -1149,13 +1192,11 @@ void webWrite()
   if (chargeOn != "")
   {
     message += "chargeOn found : -"; message += chargeOn; message += "-\n";
-    //evseUpdatePower(evsePowerOnLimit, FORCE_CURRENT);
     evseWrite("evseStatus", EVSE_ACTIVE);
   }
   if (chargeOff != "")
   {
     message += "chargeOff found : -"; message += chargeOff; message += "-\n";
-    //evseUpdatePower(0, FORCE_CURRENT);
     evseWrite("evseStatus", EVSE_DISACTIVE);
   }
   if (registerNumber != "" && value != "")
@@ -1219,6 +1260,464 @@ void webInitSetting()
 }
 
 
+void web_template()
+{
+
+  String index_html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+
+</head>
+<body>
+
+<div class="container" style="width: 80%; margin: auto;max-width: 564px">
+  <h2>bicoqueEVSE - configuration</h2>
+
+</div>
+</body>
+
+<script>
+function getData()
+{
+  var xhttp = new XMLHttpRequest();
+
+  xhttp.onreadystatechange = function()
+  {
+    if (this.readyState == 4 && this.status == 200)
+    {
+      const obj = JSON.parse(this.responseText);
+      // console.log(obj.version);
+      document.getElementById("hw_current").innerHTML = obj.powerHardwareLimit;
+
+    }
+  };
+  xhttp.open("GET", "/jsonInfo", true);
+  xhttp.send();
+}
+
+getData();
+setInterval(getData, 10000);
+
+</script>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", index_html);
+}
+
+
+
+
+void web_config()
+{
+
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+
+</head>
+<body>
+
+<div class="container" style="width: 80%; margin: auto;max-width: 564px">
+  <h2>bicoqueEVSE - configuration</h2>
+
+    <p>
+    <ul class="list-group">
+      <li class="list-group-item">
+        <p>Wifi</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=wifi_enable onChange="wifiEnableUpdate()"></span></li>
+          <li class="list-group-item">Ssid<span class="pull-right"><input type="text" value=ssid id=wifi_ssid></span></li>
+          <li class="list-group-item">Password<span class="pull-right"><input type="text" value=password id=wifi_password></span></li>
+          </ul>
+        </p>
+        <p align=right>
+          <input type="button" value="update" onclick="wifiUpdate()">
+        </p>
+      </li>
+      <li class="list-group-item">
+        <p>EVSE</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">AutoStart<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=evse_autostart onChange="evseAutostartUpdate()"></span></li>
+          </ul>
+        </p>
+      </li>
+      <li class="list-group-item">
+        <p>Global</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">alreadyStart<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=global_alreadyStart onChange="globalAlreadyStartUpdate()"></span></li>
+          <li class="list-group-item">softName<span class="pull-right" id=global_softName></span></li>
+          </ul>
+        </p>
+      </li>
+    </ul>
+    </p>
+</div>
+</body>
+
+
+
+<script>
+function getData()
+{
+  var xhttp = new XMLHttpRequest();
+
+  xhttp.onreadystatechange = function()
+  {
+    if (this.readyState == 4 && this.status == 200)
+    {
+      const obj = JSON.parse(this.responseText);
+      console.log(obj.wifi.ssid);
+      //document.getElementById("wifi_ssid").innerHTML = obj.wifi.ssid;
+      document.getElementById("wifi_ssid").value = obj.wifi.ssid;
+      document.getElementById("wifi_password").value = obj.wifi.password;
+      document.getElementById("wifi_enable").checked = obj.wifi.enable;
+
+      document.getElementById("evse_autostart").checked = obj.evse.autoStart;
+
+      document.getElementById("global_alreadyStart").checked = obj.alreadyStart;
+      document.getElementById("global_softName").innerHTML = obj.softName;
+    }
+  };
+  xhttp.open("GET", "/api/config", true);
+  xhttp.send();
+}
+
+function wifiEnableUpdate()
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?wifienable=";
+
+  if (document.getElementById("wifi_enable").checked == true)
+  {
+    url = url + "1";
+  }
+  else
+  {
+    url = url + "0";
+  }
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+function evseAutostartUpdate()
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?autostart=";
+
+  if (document.getElementById("evse_autostart").checked == true)
+  {
+    url = url + "1";
+  }
+  else
+  {
+    url = url + "0";
+  }
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+function globalAlreadyStartUpdate()
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?alreadyboot=";
+
+  if (document.getElementById("global_alreadyStart").checked == true)
+  {
+    url = url + "1";
+  }
+  else
+  {
+    url = url + "0";
+  }
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+function wifiUpdate()
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/setting?ssid=" + document.getElementById("wifi_ssid").value + "&pass=" + document.getElementById("wifi_password").value;
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+getData();
+//setInterval(getData, 10000);
+
+</script>
+</html>
+
+)rawliteral";
+
+  server.send(200, "text/html", html);
+}
+
+
+
+
+
+void web_index()
+{
+  
+  String index_html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+
+</head>
+<body>
+
+<div class="container" style="width: 80%; margin: auto;max-width: 564px">
+  <h2>bicoqueEVSE</h2>
+  <p align=center>
+    <i id="icone_chargeStation" class="fas fa-charging-station" style="color:#BDBDBD;font-size: 48px;"></i>
+    <i id="icone_chargeEV" class="fas fa-car" style="color:#BDBDBD;font-size: 48px;"></i>
+  </p>
+
+  <p><center><span id=evse_status style="text-align: center;">-</span></center></p>
+
+    <p>
+    <ul class="list-group">
+      <li class="list-group-item">Hardware Current Limit<span class="pull-right"><span id=hw_current>-</span> A</span></li>
+      <li class="list-group-item">Actual Current Limit<span class="pull-right">
+<select id=actual_current onChange="powerUpdate()">
+<option value=6>6</option>
+<option value=7>7</option>
+<option value=8>8</option>
+<option value=9>9</option>
+<option value=10>10</option>
+<option value=11>11</option>
+<option value=12>12</option>
+<option value=13>13</option>
+<option value=14>14</option>
+<option value=15>15</option>
+<option value=16>16</option>
+<option value=17>17</option>
+<option value=18>18</option>
+<option value=19>19</option>
+<option value=20>20</option>
+<option value=21>21</option>
+<option value=22>22</option>
+<option value=23>23</option>
+<option value=24>24</option>
+<option value=25>25</option>
+<option value=26>26</option>
+<option value=27>27</option>
+<option value=28>28</option>
+<option value=29>29</option>
+<option value=30>30</option>
+<option value=31>31</option>
+<option value=32>32</option>
+</select>
+</span> A</span></li>
+      <li class="list-group-item">Consommation Actuelle<span class="pull-right"><span id=actual_conso>-</span> kWh</span></li>
+      <li class="list-group-item">Derniere Consommation<span class="pull-right"><span id=last_conso>-</span> kWh</span></li>
+      <li class="list-group-item">Consommation Total<span class="pull-right"><span id=total_conso>-</span> kWh</span></li>
+    </ul>
+    </p>
+
+  <p>
+    <div class="hidden" id="evseActivate" align=center><button id="buttonActivate" type="button" class="btn btn-success" onclick="activateEVSE()">Activate EVSE</button></div>
+    <div class="hidden" id="evseDeactivate" align=center><button id="buttonDeactivate" type="button" class="btn btn-danger" onclick="deactivateEVSE()">Deactivate EVSE</button></div>
+  </p>
+
+
+<footer style="position: absolute;bottom: 0;width: 100%;max-width: 520px;height: 30px;">
+    <div class="pull-right">
+                <a href="/config">Configuration</a>
+    </div>
+</footer>
+
+
+</div>
+</body>
+
+
+
+<script>
+
+
+function activateEVSE()
+{
+  var xhr = new XMLHttpRequest();
+  xhr.open("POST", '/api/status', true);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        var json = JSON.parse(xhr.responseText);
+        console.log(json);
+    }
+  };
+  var data = JSON.stringify({"action": "on"});
+  xhr.send(data);
+}
+function deactivateEVSE()
+{
+  var xhr = new XMLHttpRequest();
+  xhr.open("POST", '/api/status', true);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        var json = JSON.parse(xhr.responseText);
+        console.log(json);
+    }
+  };
+  var data = JSON.stringify({"action": "off"});
+  xhr.send(data);
+}
+
+function powerUpdate()
+{
+  var xhr = new XMLHttpRequest();
+  xhr.open("POST", '/api/power', true);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        var json = JSON.parse(xhr.responseText);
+        console.log(json);
+    }
+  };
+
+  var data = '{"action": ' + document.getElementById("actual_current").value  + '}';
+  xhr.send(data);
+}
+
+
+function getData()
+{
+  var xhttp = new XMLHttpRequest();
+
+  xhttp.onreadystatechange = function()
+  {
+    if (this.readyState == 4 && this.status == 200)
+    {
+      const obj = JSON.parse(this.responseText);
+      // console.log(obj.version);
+      document.getElementById("hw_current").innerHTML = obj.powerHardwareLimit;
+      document.getElementById("actual_current").selectedIndex = (obj.currentLimit - 6);
+      document.getElementById("actual_conso").innerHTML = (obj.consumptionActual / 1000).toFixed(3);
+      document.getElementById("last_conso").innerHTML = (obj.consumptionLastCharge / 1000).toFixed(3);
+      document.getElementById("total_conso").innerHTML = (obj.consumptions / 1000).toFixed(0);
+
+
+      // console.log(obj.status);
+
+      if (obj.status == 0)
+      {
+        document.getElementById("icone_chargeStation").style.color = "#BDBDBD";
+        document.getElementById("icone_chargeEV").style.color = "#BDBDBD";
+      }
+      if (obj.status == 1)
+      {
+        document.getElementById("icone_chargeStation").style.color = "#059e8a";
+        document.getElementById("icone_chargeEV").style.color = "#BDBDBD";
+      }
+      if (obj.status == 2)
+      {
+        document.getElementById("icone_chargeStation").style.color = "#059e8a";
+        document.getElementById("icone_chargeEV").style.color = "#059e8a";
+      }
+      if (obj.status > 2)
+      {
+        document.getElementById("icone_chargeStation").style.color = "#059e8a";
+        document.getElementById("icone_chargeEV").style.color = "#0277BD";
+      }
+
+
+      document.getElementById("evse_status").innerHTML = obj.statusName;
+
+      if (obj.enable == 1)
+      {
+        $("#evseActivate").addClass('hidden');
+        $("#evseDeactivate").removeClass('hidden');
+      }
+      else
+      {
+        $("#evseActivate").removeClass('hidden');
+        $("#evseDeactivate").addClass('hidden');
+      }
+
+
+      //document.getElementById("").innerHTML = obj.;
+    }
+  };
+  xhttp.open("GET", "/jsonInfo", true);
+  xhttp.send();
+}
+
+
+
+getData();
+setInterval(getData, 10000);
+
+</script>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", index_html);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1247,65 +1746,6 @@ bool wifiConnectSsid(const char* ssid, const char* password)
   Serial.println("Connect timed out, opening AP");
   return false;
 }
-String wifiScan(void)
-{
-  String st;
-  int n = WiFi.scanNetworks();
-  Serial.println("scan done");
-  if (n == 0)
-    Serial.println("no networks found");
-  else
-  {
-    Serial.print(n);
-    Serial.println(" networks found");
-    st = "<ol>";
-    for (int i = 0; i < n; ++i)
-    {
-      // Print SSID and RSSI for each network found
-      st += "<li>";
-      st += WiFi.SSID(i);
-      st += " (";
-      st += WiFi.RSSI(i);
-      st += ")";
-      st += (WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*";
-      st += "</li>";
-      Serial.print(i + 1);
-      Serial.print(": ");
-      Serial.print(WiFi.SSID(i));
-      Serial.print(" (");
-      Serial.print(WiFi.RSSI(i));
-      Serial.print(")");
-      Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*");
-      delay(10);
-    }
-    st += "</ol>";
-  }
-  Serial.println("");
-  delay(100);
-
-  return st;
-}
-void wifiReset()
-{
-  softConfig.wifi.ssid     = "";
-  softConfig.wifi.password = "";
-  configSave();
-
-  WiFi.mode(WIFI_OFF);
-  WiFi.disconnect();
-}
-int wifiPower()
-{
-  int dBm = WiFi.RSSI();
-  int quality;
-  // dBm to Quality:
-  if (dBm <= -100)     { quality = 0; }
-  else if (dBm >= -50) { quality = 100; }
-  else                 { quality = 2 * (dBm + 100); }
-
-  return quality;
-}
-
 void wifiDisconnect()
 {
   WiFi.mode( WIFI_OFF );
@@ -1472,14 +1912,17 @@ void logger(String message)
 {
   if (softConfig.wifi.enable)
   {
-    HTTPClient httpClient;
+    HTTPClient httpClientPost;
     String urlTemp = BASE_URL;
-    urlTemp += "log.php?message=";
-    urlTemp += urlencode(message);
+    urlTemp       += "log.php";
+    String data    = "message=";
+    data          += urlencode(message);
 
-    httpClient.begin(urlTemp);
-    httpClient.GET();
-    httpClient.end();
+    httpClientPost.begin(urlTemp);
+    httpClientPost.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    httpClientPost.POST(data);
+    httpClientPost.end();
+
   }
 }
 
@@ -1564,11 +2007,11 @@ void setup()
       // debug create object here
       Serial.println("Config.json not found. Create one");
       
-      softConfig.wifi.enable    = wifiEnable;
+      softConfig.wifi.enable    = 1;
       softConfig.wifi.ssid      = "";
       softConfig.wifi.password  = "";
-      softConfig.evse.autoStart = evseAutoStart;
-      softConfig.alreadyStart   = alreadyBoot;
+      softConfig.evse.autoStart = 1;
+      softConfig.alreadyStart   = 0;
       softConfig.softName       = SOFT_NAME;
 
       Serial.println("Config.json : load save function");
@@ -1638,7 +2081,9 @@ void setup()
   lcd.setCursor(1, 2);
   lcd.print("                 ");
 
-  server.on("/", webRoot);
+  //server.on("/", webRoot);
+  server.on("/", web_index);
+  server.on("/config", web_config);
   server.on("/reload", webReload);
   server.on("/write", webWrite);
   server.on("/debug", webDebug);
@@ -1670,10 +2115,8 @@ void setup()
     updateCheck(1);
 
     // get time();
-    //timeClient.begin();
+    timeClient.begin();
 
-    // get time();
-    getTimeOnStartup();
     logger("Starting bicoqueEvse");
     String messageToLog = "ConsoTotalg : "; messageToLog += consumptionTotal; messageToLog += " - "; messageToLog += SOFT_VERSION ; messageToLog += " "; messageToLog += SOFT_DATE;
     logger(messageToLog);
@@ -1699,6 +2142,13 @@ void setup()
   }
 
 
+  // Force activating EVSE if autostart is on
+  if (softConfig.evse.autoStart == 1)
+  {
+    evseWrite("evseStatus", EVSE_ACTIVE);
+  }
+
+
   if (DEBUG)
   {
     Dir dir = SPIFFS.openDir("/");
@@ -1717,7 +2167,7 @@ void setup()
 void loop()
 {
   // put your main code here, to run repeatedly:
-
+  int timeNow = timeClient.getEpochTime();
 
   // If we are in menu
   if (internalMode == 1)
@@ -1793,7 +2243,7 @@ void loop()
       {
         if (evseStatus <= 1)
         {
-          if (evseAutoStart == 1) // We are into autostart mode
+          if (softConfig.evse.autoStart == 1) // We are into autostart mode
           {
             // Go to the menu
             internalMode = 1;
@@ -1882,14 +2332,14 @@ void loop()
     if (consumptionLastTime == 0)
     {
       // need to decale all int
-      consumptionLastTime = getTime();
+      consumptionLastTime = timeClient.getEpochTime();
       statsLastWrite      = consumptionLastTime;
     }
     else
     {
       consumptionActual   = evseCurrentLimit * AC_POWER ;
 
-      long timestamp = getTime(); // We work in seconds
+      long timestamp = timeClient.getEpochTime(); // We work in seconds
       float comsumptionInterval = (consumptionActual * ( timestamp - consumptionLastTime ) / 3600.00);
 
       // To always display the last charge consumption
@@ -1933,7 +2383,7 @@ void loop()
     {
       consumptionActual   = evseCurrentLimit * AC_POWER ;
 
-      long timestamp = getTime(); // We work in seconds
+      long timestamp = timeClient.getEpochTime(); // We work in seconds
       float comsumptionInterval = (consumptionActual * ( timestamp - consumptionLastTime ) / 3600.00);
 
       //consumptions[0] += int(consumptionCounter);
@@ -1979,8 +2429,17 @@ void loop()
     if (evseStatus == 1)
     {
       consumptionLastChargeRunning = 0;
-      evseUpdatePower(evsePowerOnLimit, NORMAL_STATE); // If we force stoping or starting charging EV and autostart is on or off. this things permit to reset value to the normal
-      //evseWrite("evseStatus", "disactive");
+      if (softConfig.evse.autoStart == 1)
+      {
+        if (evseEnable == 0)
+        {
+          evseWrite("evseStatus", EVSE_ACTIVE);
+        }
+      }
+      else
+      {
+        evseWrite("evseStatus", EVSE_DISACTIVE);
+      }
     }
 
     screenDefault(0);
@@ -2008,6 +2467,20 @@ void loop()
 
     }
   }
+
+
+  //-- To do evry x secs
+  if ( (timerPerHourLast + 3600) < timeNow )
+  {
+    updateCheck(0);
+    timeClient.update();
+    timerPerHourLast = timeNow;
+
+    // String messageToLog = "Datalog: temp int: "; messageToLog += temperature; messageToLog += " / Temp ext : "; messageToLog += Meteo.temp;
+    // logger(messageToLog);
+  }
+
+
 
   delay(100); // Wait 1 sec if we are not in sleepMode
 
