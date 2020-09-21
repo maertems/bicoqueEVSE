@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.4.96"
-#define SOFT_DATE "2020-08-20"
+#define SOFT_VERSION "1.4.97"
+#define SOFT_DATE "2020-09-21"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -39,8 +39,8 @@ bool internetConnection = 0;
 int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
 
 // Update info
-#define BASE_URL "http://esp.mangue.net/ota/esp/bicoqueEvse/"
-#define UPDATE_URL "http://esp.mangue.net/ota/esp/bicoqueEvse/update.php"
+#define BASE_URL "http://esp.bicoque.com/bicoqueEvse/"
+#define UPDATE_URL "http://esp.bicoque.com/bicoqueEvse/update.php"
 
 // Web server info
 ESP8266WebServer server(80);
@@ -2461,6 +2461,7 @@ void loop()
     if (sleepModeTimer > 1200) // 120 sec
     {
       Serial.println("shutdown light on screen");
+      logger("shutdown light on screen");
       lcd.noBacklight();
       sleepModeTimer = 0;
       sleepMode = 1;
