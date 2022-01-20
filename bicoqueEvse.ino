@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.4.97"
-#define SOFT_DATE "2020-09-21"
+#define SOFT_VERSION "1.5.06"
+#define SOFT_DATE "2022-01-17"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -39,8 +39,8 @@ bool internetConnection = 0;
 int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
 
 // Update info
-#define BASE_URL "http://esp.bicoque.com/bicoqueEvse/"
-#define UPDATE_URL "http://esp.bicoque.com/bicoqueEvse/update.php"
+#define BASE_URL "http://esp.bicoque.com/" SOFT_NAME "/"
+#define UPDATE_URL BASE_URL "update.php"
 
 // Web server info
 ESP8266WebServer server(80);
@@ -75,7 +75,7 @@ int timerPerHourLast     = 0;
 
 // NTP Constant
 #define NTP_SERVER "ntp.ovh.net"
-#define NTP_TIME_ZONE 2         // GMT +2:00
+#define NTP_TIME_ZONE 1         // GMT +1:00
 
 // params WifiUDP object / ntp server / timeZone in sec / request ntp every xx milisec
 WiFiUDP ntpUDP;
@@ -84,11 +84,19 @@ NTPClient timeClient(ntpUDP, NTP_SERVER , (NTP_TIME_ZONE * 3600) , 86400000);
 
 
 // config default
+typedef struct configWifiList
+{
+  String ssid;
+  String password;
+};
 typedef struct configWifi 
 {
   String ssid;
   String password;
   boolean enable;
+  int prefered;
+  int nextRecord;
+  configWifiList list[10];
 };
 typedef struct configEvse 
 {
@@ -100,6 +108,7 @@ typedef struct config
   configEvse evse;
   boolean alreadyStart;
   String softName;
+  String softVersion;
 };
 config softConfig;
 
@@ -793,16 +802,28 @@ String configSerialize()
 {
   String dataJsonConfig;
   DynamicJsonDocument jsonConfig(800);
-  JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
-  JsonObject jsonConfigEvse = jsonConfig.createNestedObject("evse");
+  JsonObject jsonConfigWifi     = jsonConfig.createNestedObject("wifi");
+  JsonArray jsonConfigWifiList  = jsonConfigWifi.createNestedArray("list");;
+  JsonObject jsonConfigEvse     = jsonConfig.createNestedObject("evse");
   
-  jsonConfig["alreadyStart"]  = softConfig.alreadyStart;
-  jsonConfig["softName"]      = softConfig.softName;
-  jsonConfigWifi["ssid"]      = softConfig.wifi.ssid;
-  jsonConfigWifi["password"]  = softConfig.wifi.password;
-  jsonConfigWifi["enable"]    = softConfig.wifi.enable;
-  jsonConfigEvse["autoStart"] = softConfig.evse.autoStart;
- 
+
+  jsonConfig["alreadyStart"]   = softConfig.alreadyStart;
+  jsonConfig["softName"]       = softConfig.softName;
+  jsonConfig["softVersion"]    = softConfig.softVersion;
+  jsonConfigWifi["ssid"]       = softConfig.wifi.ssid;
+  jsonConfigWifi["password"]   = softConfig.wifi.password;
+  jsonConfigWifi["enable"]     = softConfig.wifi.enable;
+  jsonConfigWifi["prefered"]   = softConfig.wifi.prefered;
+  jsonConfigWifi["nextRecord"] = softConfig.wifi.nextRecord;
+  jsonConfigEvse["autoStart"]  = softConfig.evse.autoStart;
+
+  for (int i=0; i <10; i++)
+  {
+	JsonObject wifiInfo = jsonConfigWifiList.createNestedObject();
+	wifiInfo["ssid"]     = softConfig.wifi.list[i].ssid; 
+	wifiInfo["password"] = softConfig.wifi.list[i].password; 
+  }
+
   serializeJson(jsonConfig, dataJsonConfig);
 
   return dataJsonConfig;
@@ -841,12 +862,21 @@ bool configRead(config &ConfigTemp, char *fileName )
     // Getting error when deserialise... I don know what to do here...
   }
 
-  ConfigTemp.alreadyStart   = jsonConfig["alreadyStart"];
-  ConfigTemp.softName       = jsonConfig["softName"].as<String>();
-  ConfigTemp.wifi.ssid      = jsonConfig["wifi"]["ssid"].as<String>();
-  ConfigTemp.wifi.password  = jsonConfig["wifi"]["password"].as<String>();
-  ConfigTemp.wifi.enable    = jsonConfig["wifi"]["enable"];
-  ConfigTemp.evse.autoStart = jsonConfig["evse"]["autoStart"];
+  ConfigTemp.alreadyStart    = jsonConfig["alreadyStart"];
+  ConfigTemp.softName        = jsonConfig["softName"].as<String>();
+  ConfigTemp.softVersion     = jsonConfig["softVersion"].as<String>();
+  ConfigTemp.wifi.ssid       = jsonConfig["wifi"]["ssid"].as<String>();
+  ConfigTemp.wifi.password   = jsonConfig["wifi"]["password"].as<String>();
+  ConfigTemp.wifi.enable     = jsonConfig["wifi"]["enable"];
+  ConfigTemp.wifi.prefered   = jsonConfig["wifi"]["prefered"];
+  ConfigTemp.wifi.nextRecord = jsonConfig["wifi"]["nextRecord"];
+  ConfigTemp.evse.autoStart  = jsonConfig["evse"]["autoStart"];
+
+  for (int i=0; i <10; i++)
+  {
+        softConfig.wifi.list[i].ssid     = jsonConfig["wifi"]["list"][i]["ssid"].as<String>(); 
+        softConfig.wifi.list[i].password = jsonConfig["wifi"]["list"][i]["password"].as<String>(); 
+  }
 
   return true;
   
@@ -858,6 +888,13 @@ void configDump(config ConfigTemp)
   Serial.print("  - ssid : "); Serial.println(ConfigTemp.wifi.ssid);
   Serial.print("  - password : "); Serial.println(ConfigTemp.wifi.password);
   Serial.print("  - enable : "); Serial.println(ConfigTemp.wifi.enable);
+  Serial.print("  - prefered : "); Serial.println(ConfigTemp.wifi.prefered);
+  Serial.print("  - nextRecord : "); Serial.println(ConfigTemp.wifi.nextRecord);
+  Serial.println("   - list:");
+  for (int i=0; i <10; i++)
+  {
+    Serial.print("    - "); Serial.print(softConfig.wifi.list[i].ssid); Serial.print(" / "); Serial.println(softConfig.wifi.list[i].password);
+  }
   Serial.println("evse data :");
   Serial.print("  - autostart : "); Serial.println(ConfigTemp.evse.autoStart);
   Serial.println("General data :");
@@ -1033,12 +1070,19 @@ void webReboot()
 
 void webApiStatus()
 {
-  String message = "{\n";
+  String message = "{";
+
+  String statusToSend = "on";
+  if (evseEnable == 0)
+  {
+    statusToSend = "off";
+  }
+
 
   if ( server.method() == HTTP_GET )
   {
-    message += "  \"status\": \""; message += evseEnable ; message += "\",\n";
-    message += "  \"statusCar\": \""; message += evseStatusName[ evseStatus ] ; message += "\"\n}\n";
+    message += "\"value\":\""; message += statusToSend ; message += "\",";
+    message += "\"statusCar\":\""; message += evseStatusName[ evseStatus ] ; message += "\"}";
   }
   else
   {
@@ -1130,19 +1174,19 @@ void webWrite()
 {
   String message;
 
-  String chargeOn = server.arg("chargeon");
-  String chargeOff = server.arg("chargeoff");
-  String amp = server.arg("amperage");
-  String modbus = server.arg("modbus");
-  String qstatus = server.arg("status");
+  String chargeOn       = server.arg("chargeon");
+  String chargeOff      = server.arg("chargeoff");
+  String amp            = server.arg("amperage");
+  String modbus         = server.arg("modbus");
+  String qstatus        = server.arg("status");
   String registerNumber = server.arg("register");
-  String value = server.arg("value");
-  String clearAll = server.arg("clearall");
-  String eepromWrite = server.arg("eepromwrite");
-  String eepromRead = server.arg("eepromread");
-  String autoStart = server.arg("autostart");
-  String wifiEnable = server.arg("wifienable");
-  String alreadyBoot = server.arg("alreadyboot");
+  String value          = server.arg("value");
+  String autoStart      = server.arg("autostart");
+  String wifiEnable     = server.arg("wifienable");
+  String alreadyBoot    = server.arg("alreadyboot");
+
+  String clearAll       = server.arg("clearall");
+  String setConsumption = server.arg("setConsumption");
 
 
   if (autoStart != "")
@@ -1211,6 +1255,13 @@ void webWrite()
     message += "clear all stats. removed";
   }
 
+  if (setConsumption != "")
+  {
+    message += "Consumption set to "; message += setConsumption ; message += "-\n";
+    jsonConsumption["lastCharge"] = consumptionLastCharge;
+    jsonConsumption["total"]      = setConsumption;
+    consumptionSave(); 
+  }
 
   Serial.println("Write done");
   message += "Write done...\n";
@@ -1808,6 +1859,109 @@ bool wifiConnect(String ssid, String password)
     return false;
 }
 
+void wifiCheck()
+{
+   // Check if we have a delay on wifi to disable it
+   if (wifiActivationTempo > 0 )
+   {
+      if (wifiActivationTempo > (millis() / 1000) )
+      {
+        if (softConfig.wifi.enable)
+        {
+          // try to reconnect evry 5 mins
+	  
+          internetConnection = wifiConnect(softConfig.wifi.list[ softConfig.wifi.prefered ].ssid, softConfig.wifi.list[ softConfig.wifi.prefered ].password);
+
+          if (internetConnection)
+          {
+            wifiActivationTempo = 0;
+          }
+          else
+          {
+	    // check other wifi found
+            int wifiFound = WiFi.scanComplete();
+            for (int i = 0; i < softConfig.wifi.nextRecord; i++)
+	    {
+		for (int j = 0; j < wifiFound; i++)
+		{
+			//if (strcmp(softConfig.wifi.list[i].ssid, WiFi.SSID(j)))
+			if (softConfig.wifi.list[i].ssid = WiFi.SSID(j) )
+			{
+				internetConnection = wifiConnect(softConfig.wifi.list[i].ssid, softConfig.wifi.list[i].password);
+				if (internetConnection)
+				{
+					break;
+				}
+			}
+		}
+    	    }
+
+	    if (internetConnection)
+            {
+                wifiActivationTempo = 0;
+            }
+            else
+	    {
+               wifiActivationTempo = (millis() / 1000) + 600;
+	    }
+          }
+        }
+        else
+        {
+          // Need to de-active wifi
+          WiFi.mode(WIFI_OFF);
+          WiFi.disconnect();
+
+          wifiActivationTempo = 0;
+          networkEnable       = 0;
+        }
+      }
+   }
+   else
+   {
+     // if we are connected/ check if are still connected
+     if (WiFi.status() != WL_CONNECTED )
+     { 
+        wifiActivationTempo = (millis() / 1000) + 600;
+     }
+   }
+}
+
+// ---------------------------------
+// Wifi scan network
+// ---------------------------------
+void wifiScanNetworks()
+{
+  String st = "";
+  WiFi.scanNetworks(true,true);
+
+  while ( WiFi.scanComplete() == -1 )
+  {
+    // Wait end of scan
+    delay(1000);
+  }
+  Serial.println("scan done");
+  Serial.print(WiFi.scanComplete()); Serial.println(" networks found");
+
+  for (int i = 0; i < WiFi.scanComplete() ; ++i)
+  {
+      // Print SSID and RSSI for each network found
+      st += WiFi.SSID(i);
+      st += WiFi.RSSI(i);
+      st += (WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*";
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print(WiFi.SSID(i));
+      Serial.print(" (");
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(")");
+      Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*");
+  }
+}
+
+
+
+
 
 
 // --------------------------------
@@ -1994,6 +2148,24 @@ void setup()
         softConfig.softName       = SOFT_NAME;
         configSave();
       }
+      else 
+      {
+ 	// For update modifications
+	if (softConfig.softVersion < "1.5.06" or softConfig.softVersion == "null" or softConfig.softVersion == "")
+ 	{
+		// Change wifi config. Need to set it them in list
+		softConfig.wifi.list[0].ssid     = softConfig.wifi.ssid;
+		softConfig.wifi.list[0].password = softConfig.wifi.password;
+		softConfig.wifi.prefered         = 0;
+		softConfig.wifi.nextRecord       = 1;
+      		for (int i=1; i <10; i++)
+      		{
+        		softConfig.wifi.list[i].ssid     = "";
+        		softConfig.wifi.list[i].password = "";
+      		}
+		configSave();
+	}
+      }
     }
     else
     {
@@ -2007,12 +2179,21 @@ void setup()
       // debug create object here
       Serial.println("Config.json not found. Create one");
       
-      softConfig.wifi.enable    = 1;
-      softConfig.wifi.ssid      = "";
-      softConfig.wifi.password  = "";
-      softConfig.evse.autoStart = 1;
-      softConfig.alreadyStart   = 0;
-      softConfig.softName       = SOFT_NAME;
+      softConfig.wifi.enable     = 1;
+      softConfig.wifi.prefered   = 0;
+      softConfig.wifi.nextRecord = 0;
+      softConfig.wifi.ssid       = "";
+      softConfig.wifi.password   = "";
+      softConfig.evse.autoStart  = 1;
+      softConfig.alreadyStart    = 0;
+      softConfig.softName        = SOFT_NAME;
+      softConfig.softVersion     = SOFT_VERSION;
+
+      for (int i=0; i <10; i++)
+      {
+        softConfig.wifi.list[i].ssid     = "";
+        softConfig.wifi.list[i].password = "";
+      }
 
       Serial.println("Config.json : load save function");
       configSave();
@@ -2058,10 +2239,12 @@ void setup()
   // Define Pins for button
   pinMode(inPin, INPUT_PULLUP);
 
-
+  
+  wifiCheck();
+  /* Replace by wifiCheck
   internetConnection = wifiConnect(softConfig.wifi.ssid, softConfig.wifi.password);
 
-  if (softConfig.wifi.enable)
+  if (internetConnection)
   {
     wifiActivationTempo = 0;
   }
@@ -2070,6 +2253,8 @@ void setup()
     if (DEBUG) { Serial.println("Deactive wifi in 5 mins."); }
     wifiActivationTempo = 600;
   }
+  */
+
 
   Serial.println("End of wifi config");
 
@@ -2168,6 +2353,9 @@ void loop()
 {
   // put your main code here, to run repeatedly:
   int timeNow = timeClient.getEpochTime();
+
+  // Check if wifi is not up
+  wifiCheck();
 
   // If we are in menu
   if (internalMode == 1)
