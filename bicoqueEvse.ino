@@ -1293,8 +1293,11 @@ void webInitSetting()
   {
     Serial.print("Debug : qsid : ");Serial.println(qsid);
     Serial.print("Debug : qpass : ");Serial.println(qpass);
-    softConfig.wifi.ssid     = qsid;
-    softConfig.wifi.password = qpass;
+    softConfig.wifi.list[softConfig.wifi.nextRecord ].ssid     = qsid;
+    softConfig.wifi.list[softConfig.wifi.nextRecord ].password = qpass;
+    softConfig.wifi.prefered                                   = softConfig.wifi.nextRecord;
+    softConfig.wifi.nextRecord ++;
+    if (softConfig.wifi.nextRecord >= 10) { softConfig.wifi.nextRecord = 0; }
     softConfig.wifi.enable   = 1;
     configSave();
 
@@ -1435,7 +1438,7 @@ function getData()
     if (this.readyState == 4 && this.status == 200)
     {
       const obj = JSON.parse(this.responseText);
-      console.log(obj.wifi.ssid);
+      console.log(obj.wifi);
       //document.getElementById("wifi_ssid").innerHTML = obj.wifi.ssid;
       document.getElementById("wifi_ssid").value = obj.wifi.ssid;
       document.getElementById("wifi_password").value = obj.wifi.password;
