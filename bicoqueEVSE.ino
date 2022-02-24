@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.06"
-#define SOFT_DATE "2022-01-17"
+#define SOFT_VERSION "1.5.07"
+#define SOFT_DATE "2022-02-24"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -36,7 +36,7 @@ ModbusMaster232 node(1);
 const char* wifiApSsid = "bicoqueEVSE";
 bool networkEnable      = 1;
 bool internetConnection = 0;
-int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
+int wifiActivationTempo = 1;
 
 // Update info
 #define BASE_URL "http://esp.bicoque.com/" SOFT_NAME "/"
@@ -2149,15 +2149,15 @@ void setup()
         Serial.println("Not the same softname");
         Serial.print("Name from configFile : "); Serial.println(softConfig.softName);
         Serial.print("Name from code       : "); Serial.println(SOFT_NAME);
-        //configFileToCreate = 1;
+        configFileToCreate = 1;
         
-        softConfig.softName       = SOFT_NAME;
-        configSave();
+        //softConfig.softName       = SOFT_NAME;
+        //configSave();
       }
       else 
       {
  	// For update modifications
-	if (softConfig.softVersion < "1.5.06" or softConfig.softVersion == "null" or softConfig.softVersion == "")
+	if (softConfig.softVersion < "1.5.07" or softConfig.softVersion == "null" or softConfig.softVersion == "")
  	{
 		// Change wifi config. Need to set it them in list
 		softConfig.wifi.list[0].ssid     = softConfig.wifi.ssid;
