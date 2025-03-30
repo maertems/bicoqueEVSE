@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.07"
-#define SOFT_DATE "2022-02-24"
+#define SOFT_VERSION "1.5.09"
+#define SOFT_DATE "2025-03-28"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -176,9 +176,9 @@ int consumptionLastChargeRunning = 0;
 
 void wifiReset()
 {
-  softConfig.wifi.ssid     = "";
-  softConfig.wifi.password = "";
-  configSave();
+  //softConfig.wifi.ssid     = "";
+  //softConfig.wifi.password = "";
+  //configSave();
 
   WiFi.mode(WIFI_OFF);
   WiFi.disconnect();
@@ -760,7 +760,7 @@ String storageRead(char *fileName)
   else
   {
     size_t sizeFile = file.size();
-    if (sizeFile > 400)
+    if (sizeFile > 1000)
     {
       Serial.println("Size of file is too clarge");
     }
@@ -810,8 +810,6 @@ String configSerialize()
   jsonConfig["alreadyStart"]   = softConfig.alreadyStart;
   jsonConfig["softName"]       = softConfig.softName;
   jsonConfig["softVersion"]    = softConfig.softVersion;
-  jsonConfigWifi["ssid"]       = softConfig.wifi.ssid;
-  jsonConfigWifi["password"]   = softConfig.wifi.password;
   jsonConfigWifi["enable"]     = softConfig.wifi.enable;
   jsonConfigWifi["prefered"]   = softConfig.wifi.prefered;
   jsonConfigWifi["nextRecord"] = softConfig.wifi.nextRecord;
@@ -865,8 +863,6 @@ bool configRead(config &ConfigTemp, char *fileName )
   ConfigTemp.alreadyStart    = jsonConfig["alreadyStart"];
   ConfigTemp.softName        = jsonConfig["softName"].as<String>();
   ConfigTemp.softVersion     = jsonConfig["softVersion"].as<String>();
-  ConfigTemp.wifi.ssid       = jsonConfig["wifi"]["ssid"].as<String>();
-  ConfigTemp.wifi.password   = jsonConfig["wifi"]["password"].as<String>();
   ConfigTemp.wifi.enable     = jsonConfig["wifi"]["enable"];
   ConfigTemp.wifi.prefered   = jsonConfig["wifi"]["prefered"];
   ConfigTemp.wifi.nextRecord = jsonConfig["wifi"]["nextRecord"];
@@ -885,8 +881,6 @@ bool configRead(config &ConfigTemp, char *fileName )
 void configDump(config ConfigTemp)
 {
   Serial.println("wifi data :");
-  Serial.print("  - ssid : "); Serial.println(ConfigTemp.wifi.ssid);
-  Serial.print("  - password : "); Serial.println(ConfigTemp.wifi.password);
   Serial.print("  - enable : "); Serial.println(ConfigTemp.wifi.enable);
   Serial.print("  - prefered : "); Serial.println(ConfigTemp.wifi.prefered);
   Serial.print("  - nextRecord : "); Serial.println(ConfigTemp.wifi.nextRecord);
@@ -1184,6 +1178,7 @@ void webWrite()
   String autoStart      = server.arg("autostart");
   String wifiEnable     = server.arg("wifienable");
   String alreadyBoot    = server.arg("alreadyboot");
+  String relay          = server.arg("relay");
 
   String clearAll       = server.arg("clearall");
   String setConsumption = server.arg("setConsumption");
@@ -1249,6 +1244,43 @@ void webWrite()
     node.setTransmitBuffer(0, value.toInt());
     node.writeMultipleRegisters(registerNumber.toInt(), 1);
   }
+
+  if (relay != "")
+  {
+    message += "relay action found : -"; message += relay ; message += "-\n";
+    if (relayOutput)
+    {
+      if (relay == "off")
+      {
+      	digitalWrite(relayOutput, HIGH);
+      }
+      else if (relay == "on")
+      {
+      	digitalWrite(relayOutput, LOW);
+      }
+      else
+      {
+      	digitalWrite(relayOutput, HIGH);
+        delay(500);
+      	digitalWrite(relayOutput, HIGH);
+        delay(500);
+      	digitalWrite(relayOutput, HIGH);
+        delay(500);
+      	digitalWrite(relayOutput, HIGH);
+        delay(500);
+
+        digitalWrite(relayOutput, LOW);
+        delay(500);
+        digitalWrite(relayOutput, LOW);
+        delay(500);
+        digitalWrite(relayOutput, LOW);
+        delay(500);
+        digitalWrite(relayOutput, LOW);
+        delay(500);
+      }
+    }
+  }
+
 
   if (clearAll == "yes")
   {
@@ -1972,6 +2004,8 @@ void wifiScanNetworks()
 // --------------------------------
 void updateCheck(bool displayScreen)
 {
+    
+
     if (displayScreen)
     {
       lcd.setCursor(1, 1);
@@ -2149,6 +2183,7 @@ void setup()
         Serial.println("Not the same softname");
         Serial.print("Name from configFile : "); Serial.println(softConfig.softName);
         Serial.print("Name from code       : "); Serial.println(SOFT_NAME);
+
         configFileToCreate = 1;
         
         //softConfig.softName       = SOFT_NAME;
@@ -2160,8 +2195,6 @@ void setup()
 	if (softConfig.softVersion < "1.5.07" or softConfig.softVersion == "null" or softConfig.softVersion == "")
  	{
 		// Change wifi config. Need to set it them in list
-		softConfig.wifi.list[0].ssid     = softConfig.wifi.ssid;
-		softConfig.wifi.list[0].password = softConfig.wifi.password;
 		softConfig.wifi.prefered         = 0;
 		softConfig.wifi.nextRecord       = 1;
       		for (int i=1; i <10; i++)
@@ -2188,8 +2221,6 @@ void setup()
       softConfig.wifi.enable     = 1;
       softConfig.wifi.prefered   = 0;
       softConfig.wifi.nextRecord = 0;
-      softConfig.wifi.ssid       = "";
-      softConfig.wifi.password   = "";
       softConfig.evse.autoStart  = 1;
       softConfig.alreadyStart    = 0;
       softConfig.softName        = SOFT_NAME;
