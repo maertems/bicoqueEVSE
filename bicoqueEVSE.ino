@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.09"
-#define SOFT_DATE "2025-03-28"
+#define SOFT_VERSION "1.5.10"
+#define SOFT_DATE "2025-03-30"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
