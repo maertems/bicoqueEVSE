@@ -39,7 +39,7 @@ String storageRead(String fileName)
   else
   {
     size_t sizeFile = file.size();
-    if (sizeFile > 400 and 1 == 0)
+    if (sizeFile > 1000 )
     {
        Serial.println("Size of file is too clarge");
     }

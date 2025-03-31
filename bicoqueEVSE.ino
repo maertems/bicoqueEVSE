@@ -26,7 +26,7 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.11"
+#define SOFT_VERSION "1.5.12"
 #define SOFT_DATE "2025-03-31"
 #define EVSE_VERSION 10
 
@@ -37,6 +37,8 @@ const char* wifiApSsid = "bicoqueEVSE";
 bool networkEnable      = 1;
 bool internetConnection = 0;
 int wifiActivationTempo = 1;
+
+#define WIFINUMBER 3
 
 // Update info
 #define BASE_URL "http://esp.bicoque.com/" SOFT_NAME "/"
@@ -64,10 +66,10 @@ int evseConnectionProblem = 0;
 
 // Json allocation
 //-- For all http API paramerters
-StaticJsonDocument<200> jsonBuffer;
+StaticJsonDocument<1000> jsonBuffer;
 
 String dataJsonConsumption;
-DynamicJsonDocument jsonConsumption(200);
+DynamicJsonDocument jsonConsumption(1000);
 
 // For timers
 int timerPerHourLast     = 0;
@@ -96,7 +98,7 @@ typedef struct configWifi
   boolean enable;
   int prefered;
   int nextRecord;
-  configWifiList list[10];
+  configWifiList list[WIFINUMBER];
 };
 typedef struct configEvse 
 {
@@ -140,6 +142,7 @@ int relayOutput = D5; // set to 0 if disactive
 int page = 0;
 
 // Menu setings
+//char* menu1[] = { "SETINGS", "Amperage","AutoStart","Infos","Consommation","Wifi","Exit" } ;
 //char* menu1[] = { "SETINGS", "Amperage","AutoStart","Infos","Consommation","Wifi","Exit" } ;
 char* menu1[] = { "SETINGS", "Amperage", "AutoStart", "Infos", "Wifi", "Reboot", "Exit" } ;
 char* menu2[] = { "WIFI", "Activation", "Reset", "Back" } ;
@@ -818,7 +821,7 @@ String configSerialize()
   jsonConfigWifi["nextRecord"] = softConfig.wifi.nextRecord;
   jsonConfigEvse["autoStart"]  = softConfig.evse.autoStart;
 
-  for (int i=0; i <10; i++)
+  for (int i=0; i < WIFINUMBER ; i++)
   {
 	JsonObject wifiInfo = jsonConfigWifiList.createNestedObject();
 	wifiInfo["ssid"]     = softConfig.wifi.list[i].ssid; 
@@ -871,7 +874,7 @@ bool configRead(config &ConfigTemp, char *fileName )
   ConfigTemp.wifi.nextRecord = jsonConfig["wifi"]["nextRecord"];
   ConfigTemp.evse.autoStart  = jsonConfig["evse"]["autoStart"];
 
-  for (int i=0; i <10; i++)
+  for (int i=0; i < WIFINUMBER ; i++)
   {
         softConfig.wifi.list[i].ssid     = jsonConfig["wifi"]["list"][i]["ssid"].as<String>(); 
         softConfig.wifi.list[i].password = jsonConfig["wifi"]["list"][i]["password"].as<String>(); 
@@ -888,7 +891,7 @@ void configDump(config ConfigTemp)
   Serial.print("  - prefered : "); Serial.println(ConfigTemp.wifi.prefered);
   Serial.print("  - nextRecord : "); Serial.println(ConfigTemp.wifi.nextRecord);
   Serial.println("   - list:");
-  for (int i=0; i <10; i++)
+  for (int i=0; i < WIFINUMBER ; i++)
   {
     Serial.print("    - "); Serial.print(softConfig.wifi.list[i].ssid); Serial.print(" / "); Serial.println(softConfig.wifi.list[i].password);
   }
@@ -1332,7 +1335,7 @@ void webInitSetting()
     softConfig.wifi.list[softConfig.wifi.nextRecord ].password = qpass;
     softConfig.wifi.prefered                                   = softConfig.wifi.nextRecord;
     softConfig.wifi.nextRecord ++;
-    if (softConfig.wifi.nextRecord >= 10) { softConfig.wifi.nextRecord = 0; }
+    if (softConfig.wifi.nextRecord >= WIFINUMBER ) { softConfig.wifi.nextRecord = 0; }
     softConfig.wifi.enable   = 1;
     configSave();
 
@@ -1818,6 +1821,7 @@ void webFsDel()
   storageDel(file);
   server.send(200, "text/html", "done");
 }
+/*
 void webFsDownload()
 {
   String file    = server.arg("file");
@@ -1825,7 +1829,7 @@ void webFsDownload()
   updateWebServerFile(file);
   server.send(200, "text/html", "done");
 }
-
+*/
 
 
 
@@ -2218,10 +2222,8 @@ void setup()
       Dir dir = SPIFFS.openDir("/");
       while (dir.next())
       {
-        logger(dir.fileName());
         File f = dir.openFile("r");
-        String messageToLog = "size:"; messageToLog += f.size();
-        logger(messageToLog);
+	Serial.print(dir.fileName());  Serial.print(" : "); Serial.print(f.size()); Serial.println("o");
       }
     }
 
@@ -2252,7 +2254,7 @@ void setup()
 		// Change wifi config. Need to set it them in list
 		softConfig.wifi.prefered         = 0;
 		softConfig.wifi.nextRecord       = 1;
-      		for (int i=1; i <10; i++)
+      		for (int i=1; i < WIFINUMBER ; i++)
       		{
         		softConfig.wifi.list[i].ssid     = "";
         		softConfig.wifi.list[i].password = "";
@@ -2283,7 +2285,7 @@ void setup()
       softConfig.softName        = SOFT_NAME;
       softConfig.softVersion     = SOFT_VERSION;
 
-      for (int i=0; i <10; i++)
+      for (int i=0; i < WIFINUMBER ; i++)
       {
         softConfig.wifi.list[i].ssid     = "";
         softConfig.wifi.list[i].password = "";
@@ -2368,7 +2370,7 @@ void setup()
   server.on("/fs/dir", webFsDir);
   server.on("/fs/read", webFsRead);
   server.on("/fs/del", webFsDel);
-  server.on("/fs/download", webFsDownload);
+//  server.on("/fs/download", webFsDownload);
 
   server.serveStatic("/web/", SPIFFS, "/webserver/");
 
