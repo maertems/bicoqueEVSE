@@ -18,7 +18,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 
-
+#include "lib/storage.h"
 
 // Instantiate ModbusMaster object as slave ID 1
 ModbusMaster232 node(1);
@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.10"
-#define SOFT_DATE "2025-03-30"
+#define SOFT_VERSION "1.5.11"
+#define SOFT_DATE "2025-03-31"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -747,6 +747,7 @@ int checkButton()
 // ********************************************
 // SPIFFFS storage Functions
 // ********************************************
+/*
 String storageRead(char *fileName)
 {
   String dataText;
@@ -783,6 +784,8 @@ bool storageWrite(char *fileName, String dataText)
 
   return true;
 }
+
+*/
 
 
 void consumptionSave()
@@ -1793,6 +1796,36 @@ setInterval(getData, 10000);
 }
 
 
+// Storage webserver functions
+void webFsDir()
+{
+  String directory    = server.arg("directory");
+
+  String message = storageDir(directory);
+  server.send(200, "text/html", message);
+}
+void webFsRead()
+{
+  String file    = server.arg("file");
+
+  String message = storageRead(file);
+  server.send(200, "text/html", message);
+}
+void webFsDel()
+{
+  String file    = server.arg("file");
+
+  storageDel(file);
+  server.send(200, "text/html", "done");
+}
+void webFsDownload()
+{
+  String file    = server.arg("file");
+
+  updateWebServerFile(file);
+  server.send(200, "text/html", "done");
+}
+
 
 
 
@@ -1860,13 +1893,12 @@ bool wifiConnect(String ssid, String password)
     if (wifiConnected)
     {
       if (DEBUG) { Serial.println("WiFi connected"); }
-      internetConnection = 1;
 
       lcd.print(" .. ok");
 
       ip = WiFi.localIP();
 
-      return true;
+      return 1;
     }
     else
     {
@@ -1891,22 +1923,20 @@ bool wifiConnect(String ssid, String password)
 
     ip = WiFi.softAPIP();
 
-    return false;
+    return 0;
 }
 
-void wifiCheck()
+void wifiCheck(boolean isSetup)
 {
    // Check if we have a delay on wifi to disable it
-   if (wifiActivationTempo > 0 )
+   if (wifiActivationTempo > 0 or isSetup)
    {
-      if (wifiActivationTempo < (millis() / 1000) )
+      if ( (wifiActivationTempo < (millis() / 1000)) or isSetup )
       {
         if (softConfig.wifi.enable)
         {
           // try to reconnect evry 10 mins
-	  
           internetConnection = wifiConnect(softConfig.wifi.list[ softConfig.wifi.prefered ].ssid, softConfig.wifi.list[ softConfig.wifi.prefered ].password);
-
           if (internetConnection)
           {
             wifiActivationTempo = 0;
@@ -1943,12 +1973,21 @@ void wifiCheck()
         }
         else
         {
-          // Need to de-active wifi
-          WiFi.mode(WIFI_OFF);
-          WiFi.disconnect();
+          if (isSetup)
+	  {
+            // Enable Wifi for 10 minutes at startup.
+            internetConnection = wifiConnect(softConfig.wifi.list[ softConfig.wifi.prefered ].ssid, softConfig.wifi.list[ softConfig.wifi.prefered ].password);
+            wifiActivationTempo = (millis() / 1000) + 600;
+	  }
+	  else
+	  {
+            // Need to de-active wifi
+            WiFi.mode(WIFI_OFF);
+            WiFi.disconnect();
 
-          wifiActivationTempo = 0;
-          networkEnable       = 0;
+            wifiActivationTempo = 0;
+            networkEnable       = 0;
+          }
         }
       }
    }
@@ -2171,6 +2210,22 @@ void setup()
   // FileSystem
   if (SPIFFS.begin())
   {
+    delay(1000);
+
+    if (DEBUG)
+    {
+      Serial.println("Content of spif FS :");
+      Dir dir = SPIFFS.openDir("/");
+      while (dir.next())
+      {
+        logger(dir.fileName());
+        File f = dir.openFile("r");
+        String messageToLog = "size:"; messageToLog += f.size();
+        logger(messageToLog);
+      }
+    }
+
+
     boolean configFileToCreate = 0;
     // check if we have et config file
     if (SPIFFS.exists("/config.json"))
@@ -2208,15 +2263,17 @@ void setup()
     }
     else
     {
+      Serial.println("Config.json not found.");
       configFileToCreate = 1;
     }
+
 
     if (configFileToCreate == 1)
     {
       // No config found.
       // Start in AP mode to configure
       // debug create object here
-      Serial.println("Config.json not found. Create one");
+      Serial.println("Create new config File");
       
       softConfig.wifi.enable     = 1;
       softConfig.wifi.prefered   = 0;
@@ -2239,6 +2296,7 @@ void setup()
 
     if (SPIFFS.exists("/consumption.json"))
     {
+      Serial.println("Consuption file found. Read data");
       dataJsonConsumption = storageRead("/consumption.json");
       DeserializationError jsonError = deserializeJson(jsonConsumption, dataJsonConsumption);
       if (jsonError)
@@ -2251,6 +2309,7 @@ void setup()
     }
     else
     {
+      Serial.println("No consuption file found. Create a new one");
       consumptionLastCharge  = 0;
       consumptionTotal       = 0;
 
@@ -2276,26 +2335,13 @@ void setup()
   // Define Pins for button
   pinMode(inPin, INPUT_PULLUP);
 
-  
-  wifiCheck();
-  /* Replace by wifiCheck
-  internetConnection = wifiConnect(softConfig.wifi.ssid, softConfig.wifi.password);
-
-  if (internetConnection)
-  {
-    wifiActivationTempo = 0;
-  }
-  else
-  {
-    if (DEBUG) { Serial.println("Deactive wifi in 5 mins."); }
-    wifiActivationTempo = 600;
-  }
-  */
-
-
+  //
+  // W I F I  part
+  //
+  // Start wifi config  
+  wifiCheck(1);
   Serial.println("End of wifi config");
 
-  int wifiMode = 0;
 
   // Start the server
   lcd.setCursor(1, 1);
@@ -2318,6 +2364,27 @@ void setup()
   server.on("/wifi", webInitRoot);
   server.on("/setting", webInitSetting);
 
+  //-- debug / help programming
+  server.on("/fs/dir", webFsDir);
+  server.on("/fs/read", webFsRead);
+  server.on("/fs/del", webFsDel);
+  server.on("/fs/download", webFsDownload);
+
+  server.serveStatic("/web/", SPIFFS, "/webserver/");
+
+//  server.serveStatic("/", SPIFFS, "/webserver/index.html");
+//  server.serveStatic("/config", SPIFFS, "/webserver/config.html");
+
+//  server.serveStatic("/web/bootstrap-3.4.1.min.css", SPIFFS, "/webserver/bootstrap-3.4.1.min.css");
+//  server.serveStatic("/web/bootstrap-3.4.1.min.js", SPIFFS, "/webserver/bootstrap-3.4.1.min.js");
+//  server.serveStatic("/web/fontawesome-v5.7.2-all.css", SPIFFS, "/webserver/fontawesome-v5.7.2-all.css");
+//  server.serveStatic("/web/highcharts.js", SPIFFS, "/webserver/highcharts.js");
+//  server.serveStatic("/web/jquery-3.5.1.min.js", SPIFFS, "/wevserver/jquery-3.5.1.min.js");
+
+  server.serveStatic("/fs/config", SPIFFS, "/config.json");
+
+
+
   server.onNotFound(webNotFound);
   server.begin();
 
@@ -2333,6 +2400,12 @@ void setup()
 
   if (internetConnection)
   {
+    if (DEBUG)
+    {
+      Serial.print("Internet Connection is UP : ");
+      Serial.println(internetConnection);
+    }
+
     // check update
     updateCheck(1);
 
@@ -2360,7 +2433,6 @@ void setup()
   {
     softConfig.alreadyStart = 1;
     configSave();
-    // eepromWrite(ALREADYBOOT, "1");
   }
 
 
@@ -2371,17 +2443,6 @@ void setup()
   }
 
 
-  if (DEBUG)
-  {
-    Dir dir = SPIFFS.openDir("/");
-    while (dir.next())
-    {
-      logger(dir.fileName());
-      File f = dir.openFile("r");
-      String messageToLog = "size:"; messageToLog += f.size();
-      logger(messageToLog);
-    }
-  }
 
 }
 
@@ -2392,7 +2453,7 @@ void loop()
   int timeNow = timeClient.getEpochTime();
 
   // Check if wifi is not up
-  wifiCheck();
+  wifiCheck(0);
 
   // If we are in menu
   if (internalMode == 1)
@@ -2696,7 +2757,7 @@ void loop()
 
 
   //-- To do evry x secs
-  if ( (timerPerHourLast + 3600) < timeNow )
+  if ( internetConnection and ((timerPerHourLast + 3600) < timeNow) )
   {
     updateCheck(0);
     timeClient.update();
