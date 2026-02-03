@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.12"
-#define SOFT_DATE "2025-03-31"
+#define SOFT_VERSION "1.5.13"
+#define SOFT_DATE "2025-04-01"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -51,8 +51,8 @@ IPAddress ip;
 
 // EVSE info
 char* evseStatusName[] = { "n/a", "Waiting Car", "Car Connected", "Charging", "Charging", "Error" } ;
-String evseRegisters[25]; // indicate the number of registers
-int registers[] = { 1000, 1001, 1002, 1003, 1004, 1005, 1006, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 };
+String evseRegisters[29]; // indicate the number of registers
+int registers[] = { 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 };
 int simpleEvseVersion ; // need to have it to check a begining and not start if it's not the same
 int evseCurrentLimit  = 0;
 int evsePowerOnLimit  = 0;
@@ -747,48 +747,14 @@ int checkButton()
 }
 
 
-// ********************************************
-// SPIFFFS storage Functions
-// ********************************************
-/*
-String storageRead(char *fileName)
-{
-  String dataText;
 
-  File file = SPIFFS.open(fileName, "r");
-  if (!file)
-  {
-    logger("FS: opening file error");
-    //-- debug
-  }
-  else
-  {
-    size_t sizeFile = file.size();
-    if (sizeFile > 1000)
-    {
-      Serial.println("Size of file is too clarge");
-    }
-    else
-    {
-      dataText = file.readString();
-      file.close();
-    }
-  }
 
-  return dataText;
-}
 
-bool storageWrite(char *fileName, String dataText)
-{
-  File file = SPIFFS.open(fileName, "w");
-  file.println(dataText);
-
-  file.close();
-
-  return true;
-}
-
-*/
+//
+//
+// File and config manipulation
+//
+//
 
 
 void consumptionSave()
@@ -906,6 +872,8 @@ void configDump(config ConfigTemp)
 
 
 
+
+
 // ********************************************
 // SCREEN Functions
 // ********************************************
@@ -999,6 +967,8 @@ void webRoot() {
   message += "</html>";
   server.send(200, "text/html", message);
 }
+
+// --------------- webDebug
 void webDebug()
 {
   // get all infos from registers
@@ -1064,6 +1034,7 @@ void webReboot()
   message += "Rebbot in progress...<b>";
   message += "</html>\n";
   server.send(200, "text/html", message);
+  delay(1000);
 
   ESP.restart();
 }
@@ -1800,6 +1771,33 @@ setInterval(getData, 10000);
 
 
 // Storage webserver functions
+void updateWebServerFile(String fileName)
+{
+    HTTPClient httpClient;
+    String urlTemp = BASE_URL;
+    urlTemp += fileName;
+
+    if (DEBUG)
+    {
+      Serial.print("updateWebServerFiles : Url for external use : "); Serial.println(urlTemp);
+    }
+
+    httpClient.begin(urlTemp);
+    int httpResponseCode = httpClient.GET();
+    if (httpResponseCode > 0)
+    {
+      Serial.print("Size from file : "); Serial.println(httpClient.getSize());
+
+      File file = SPIFFS.open(fileName, "w");
+      int bytesWritten = httpClient.writeToStream(&file);
+      file.close();
+      httpClient.end();
+
+      Serial.print("BytesWritten : "); Serial.println(bytesWritten);
+
+    }
+}
+
 void webFsDir()
 {
   String directory    = server.arg("directory");
@@ -1821,7 +1819,6 @@ void webFsDel()
   storageDel(file);
   server.send(200, "text/html", "done");
 }
-/*
 void webFsDownload()
 {
   String file    = server.arg("file");
@@ -1829,7 +1826,6 @@ void webFsDownload()
   updateWebServerFile(file);
   server.send(200, "text/html", "done");
 }
-*/
 
 
 
@@ -2224,6 +2220,7 @@ void setup()
       {
         File f = dir.openFile("r");
 	Serial.print(dir.fileName());  Serial.print(" : "); Serial.print(f.size()); Serial.println("o");
+        f.close();
       }
     }
 
@@ -2235,21 +2232,20 @@ void setup()
       Serial.println("Config.json found. read data");
       configRead(softConfig, "/config.json" );
 
+
       if (softConfig.softName != SOFT_NAME)
       {
         Serial.println("Not the same softname");
         Serial.print("Name from configFile : "); Serial.println(softConfig.softName);
         Serial.print("Name from code       : "); Serial.println(SOFT_NAME);
 
+        // Create a new config file for this new Soft
         configFileToCreate = 1;
-        
-        //softConfig.softName       = SOFT_NAME;
-        //configSave();
       }
-      else 
+      else
       {
  	// For update modifications
-	if (softConfig.softVersion < "1.5.07" or softConfig.softVersion == "null" or softConfig.softVersion == "")
+	if (softConfig.softVersion < "1.5.07")
  	{
 		// Change wifi config. Need to set it them in list
 		softConfig.wifi.prefered         = 0;
@@ -2259,6 +2255,11 @@ void setup()
         		softConfig.wifi.list[i].ssid     = "";
         		softConfig.wifi.list[i].password = "";
       		}
+		configSave();
+	}
+        else if (softConfig.softVersion != SOFT_VERSION)
+ 	{
+		softConfig.softVersion     = SOFT_VERSION;
 		configSave();
 	}
       }
@@ -2370,18 +2371,18 @@ void setup()
   server.on("/fs/dir", webFsDir);
   server.on("/fs/read", webFsRead);
   server.on("/fs/del", webFsDel);
-//  server.on("/fs/download", webFsDownload);
+  server.on("/fs/download", webFsDownload);
 
-  server.serveStatic("/web/", SPIFFS, "/webserver/");
+  server.serveStatic("/web/", SPIFFS, "/web/");
 
-//  server.serveStatic("/", SPIFFS, "/webserver/index.html");
-//  server.serveStatic("/config", SPIFFS, "/webserver/config.html");
+//  server.serveStatic("/", SPIFFS, "/web/index.html");
+//  server.serveStatic("/config", SPIFFS, "/web/config.html");
 
-//  server.serveStatic("/web/bootstrap-3.4.1.min.css", SPIFFS, "/webserver/bootstrap-3.4.1.min.css");
-//  server.serveStatic("/web/bootstrap-3.4.1.min.js", SPIFFS, "/webserver/bootstrap-3.4.1.min.js");
-//  server.serveStatic("/web/fontawesome-v5.7.2-all.css", SPIFFS, "/webserver/fontawesome-v5.7.2-all.css");
-//  server.serveStatic("/web/highcharts.js", SPIFFS, "/webserver/highcharts.js");
-//  server.serveStatic("/web/jquery-3.5.1.min.js", SPIFFS, "/wevserver/jquery-3.5.1.min.js");
+//  server.serveStatic("/web/bootstrap-3.4.1.min.css", SPIFFS, "/web/bootstrap-3.4.1.min.css");
+//  server.serveStatic("/web/bootstrap-3.4.1.min.js", SPIFFS, "/web/bootstrap-3.4.1.min.js");
+//  server.serveStatic("/web/fontawesome-v5.7.2-all.css", SPIFFS, "/web/fontawesome-v5.7.2-all.css");
+//  server.serveStatic("/web/highcharts.js", SPIFFS, "/web/highcharts.js");
+//  server.serveStatic("/web/jquery-3.5.1.min.js", SPIFFS, "/web/jquery-3.5.1.min.js");
 
   server.serveStatic("/fs/config", SPIFFS, "/config.json");
 
