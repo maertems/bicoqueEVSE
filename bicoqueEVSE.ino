@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.13"
-#define SOFT_DATE "2025-04-01"
+#define SOFT_VERSION "1.5.14"
+#define SOFT_DATE "2026-03-13"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -2168,8 +2168,12 @@ void setup()
   Serial.println("");
   Serial.print("Welcome to bicoqueEVSE - "); Serial.println(SOFT_VERSION);
 
+Serial.print("debug: avant wifi");
   // Scan for wifi network
   WiFi.scanNetworks(true,true);
+Serial.print("debug: apres wifi");
+
+
 
   // relay Init
   if (relayOutput)
@@ -2177,6 +2181,8 @@ void setup()
     pinMode(relayOutput, OUTPUT);
     digitalWrite(relayOutput, LOW);
   }
+
+Serial.print("debug: apres relais");
 
 
   // Screen Init
@@ -2206,6 +2212,9 @@ void setup()
   lcd.print("Booting...");
   lcd.setCursor(11, 3);
   lcd.print("v"); lcd.print(SOFT_VERSION);
+
+Serial.print("debug: apres ecran");
+
 
   // FileSystem
   if (SPIFFS.begin())
