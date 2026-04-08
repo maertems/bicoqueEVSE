@@ -26,8 +26,8 @@ ModbusMaster232 node(1);
 
 // firmware version
 #define SOFT_NAME "bicoqueEVSE"
-#define SOFT_VERSION "1.5.14"
-#define SOFT_DATE "2026-03-13"
+#define SOFT_VERSION "1.5.15"
+#define SOFT_DATE "2026-04-08"
 #define EVSE_VERSION 10
 
 #define DEBUG 1
@@ -51,6 +51,7 @@ IPAddress ip;
 
 // EVSE info
 char* evseStatusName[] = { "n/a", "Waiting Car", "Car Connected", "Charging", "Charging", "Error" } ;
+#define EVSE_STATUS_NAME_COUNT 6
 String evseRegisters[29]; // indicate the number of registers
 int registers[] = { 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 };
 int simpleEvseVersion ; // need to have it to check a begining and not start if it's not the same
@@ -527,6 +528,14 @@ void getMenu(int action)
 // ********************************************
 // EVSE Functions
 // ********************************************
+char* evseGetStatusName(int status)
+{
+  if (status >= 0 && status < EVSE_STATUS_NAME_COUNT) {
+    return evseStatusName[status];
+  }
+  return evseStatusName[0]; // "n/a"
+}
+
 void evseReload()
 {
   node.readHoldingRegisters(1000, 1);
@@ -819,9 +828,9 @@ bool configRead(config &ConfigTemp, char *fileName )
 {
   String dataJsonConfig;
   DynamicJsonDocument jsonConfig(800);
-  
-  dataJsonConfig = storageRead("/config.json");
-  
+
+  dataJsonConfig = storageRead(fileName);
+
   DeserializationError jsonError = deserializeJson(jsonConfig, dataJsonConfig);
   if (jsonError)
   {
@@ -842,12 +851,12 @@ bool configRead(config &ConfigTemp, char *fileName )
 
   for (int i=0; i < WIFINUMBER ; i++)
   {
-        softConfig.wifi.list[i].ssid     = jsonConfig["wifi"]["list"][i]["ssid"].as<String>(); 
-        softConfig.wifi.list[i].password = jsonConfig["wifi"]["list"][i]["password"].as<String>(); 
+        ConfigTemp.wifi.list[i].ssid     = jsonConfig["wifi"]["list"][i]["ssid"].as<String>();
+        ConfigTemp.wifi.list[i].password = jsonConfig["wifi"]["list"][i]["password"].as<String>();
   }
 
   return true;
-  
+
 }
 
 void configDump(config ConfigTemp)
@@ -957,7 +966,7 @@ void webRoot() {
   message += "On power on Limit : "; message += evsePowerOnLimit; message += "A<br>";
   message += "Actual Limit : "; message += evseCurrentLimit; message += "A<br>";
   message += "EVSE status : ";
-  message += evseStatusName[ evseStatus ];
+  message += evseGetStatusName( evseStatus );
   message += "<br><br>";
 
   message += "Wifi power : "; message += WiFi.RSSI(); message += "<br>";
@@ -1018,7 +1027,7 @@ void webJsonInfo()
   message += "  \"wifiPower\": \""; message += wifiPower() ; message += "\",\n";
   message += "  \"uptime\": \""; message += timestamp ; message += "\",\n";
   message += "  \"time\": \""; message += timeClient.getEpochTime() ; message += "\",\n";
-  message += "  \"statusName\": \""; message += evseStatusName[ evseStatus ] ; message += "\",\n";
+  message += "  \"statusName\": \""; message += evseGetStatusName( evseStatus ) ; message += "\",\n";
   message += "  \"enable\": \""; message += evseEnable ; message += "\",\n";
 
 
@@ -1053,7 +1062,7 @@ void webApiStatus()
   if ( server.method() == HTTP_GET )
   {
     message += "\"value\":\""; message += statusToSend ; message += "\",";
-    message += "\"statusCar\":\""; message += evseStatusName[ evseStatus ] ; message += "\"}";
+    message += "\"statusCar\":\""; message += evseGetStatusName( evseStatus ) ; message += "\"}";
   }
   else
   {
@@ -1947,10 +1956,10 @@ void wifiCheck(boolean isSetup)
             int wifiFound = WiFi.scanComplete();
             for (int i = 0; i < softConfig.wifi.nextRecord; i++)
 	    {
-		for (int j = 0; j < wifiFound; i++)
+		for (int j = 0; j < wifiFound; j++)
 		{
 			//if (strcmp(softConfig.wifi.list[i].ssid, WiFi.SSID(j)))
-			if (softConfig.wifi.list[i].ssid = WiFi.SSID(j) )
+			if (softConfig.wifi.list[i].ssid == WiFi.SSID(j) )
 			{
 				internetConnection = wifiConnect(softConfig.wifi.list[i].ssid, softConfig.wifi.list[i].password);
 				if (internetConnection)
@@ -2692,7 +2701,7 @@ void loop()
       statsLastWrite       = 0;
       consumptionTotalTemp = 0;
 
-      jsonConsumption["LastCharge"] = consumptionLastCharge;
+      jsonConsumption["lastCharge"] = consumptionLastCharge;
       jsonConsumption["total"]      = consumptionTotal;
       consumptionSave();
 
